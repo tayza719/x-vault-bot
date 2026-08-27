@@ -2,7 +2,6 @@ import os
 import sqlite3
 import time
 import requests
-from flask import Flask, request
 import telebot
 from telebot import types
 
@@ -10,15 +9,10 @@ from telebot import types
 # CONFIGURATION
 # ---------------------------------------------------------
 BOT_TOKEN = "8683965691:AAEthMpBt_RJNY1NPNDPtH-hSnTcpWFU0L8"
-HEROKU_APP_NAME = "x-vault-bot-20----26"
 ADMIN_ID = 7613605178
 NOWPAYMENTS_API_KEY = os.environ.get("NOWPAYMENTS_API_KEY", "test_key")
 
-WEBHOOK_URL = f"https://{HEROKU_APP_NAME}.herokuapp.com/{BOT_TOKEN}"
-
-# Webhook သုံးလျှင် Threading ပိတ်ထားခြင်းက ပိုမို တည်ငြိမ်စေပါသည်
-bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
-app = Flask(__name__)
+bot = telebot.TeleBot(BOT_TOKEN)
 
 # ---------------------------------------------------------
 # DATABASE SETUP (SQLite)
@@ -51,8 +45,8 @@ def init_db():
 
 init_db()
 
-def is_admin(user):
-    return str(user.id) == str(ADMIN_ID)
+def is_admin(user_id):
+    return str(user_id) == str(ADMIN_ID)
 
 # ---------------------------------------------------------
 # NOWPAYMENTS API FUNCTIONS
@@ -68,7 +62,6 @@ def create_nowpayments_invoice(amount_usd, order_id):
         "price_currency": "usd",
         "order_id": order_id,
         "order_description": "Vault Bot Purchase",
-        "ipn_callback_url": f"https://{HEROKU_APP_NAME}.herokuapp.com/nowpayments_webhook",
         "success_url": "https://t.me",
         "cancel_url": "https://t.me"
     }
@@ -145,22 +138,13 @@ def process_qty(message, category, unit_price):
         
         invoice = create_nowpayments_invoice(total_price, order_id)
         if invoice and "invoice_url" in invoice:
-            payment_id = str(invoice["id"])
-            
-            conn = sqlite3.connect("bot_vault.db")
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO orders VALUES (?, ?, ?, ?, 'waiting')", 
-                           (payment_id, message.from_user.id, category, qty))
-            conn.commit()
-            conn.close()
-
             pay_msg = (
                 f"🧾 *Payment Invoice Generated*\n\n"
                 f"📦 Item: *{category.upper()}*\n"
                 f"🔢 Quantity: *{qty}*\n"
                 f"💰 Total Amount: *${total_price} USDT*\n\n"
                 f"🔗 ငွေလွှဲရန် Link ကို နှိပ်ပါ:\n{invoice['invoice_url']}\n\n"
-                f"⏳ *30 မိနစ်အတွင်း ငွေလွှဲ အပြီးလုပ်ပေးပါ။ ငွေဝင်သည်နှင့် အကောင့် အလိုအလျောက် ရောက်လာပါမည်။*"
+                f"⏳ *30 မိနစ်အတွင်း ငွေလွှဲ အပြီးလုပ်ပေးပါ။*"
             )
             bot.send_message(message.chat.id, pay_msg, parse_mode="Markdown")
         else:
@@ -174,7 +158,7 @@ def process_qty(message, category, unit_price):
 # ---------------------------------------------------------
 @bot.message_handler(commands=['addx'])
 def add_x_stock(message):
-    if not is_admin(message.from_user): return
+    if not is_admin(message.from_user.id): return
     accounts = message.text.replace("/addx", "").strip().split("\n")
     valid_accs = [a.strip() for a in accounts if a.strip()]
     if not valid_accs:
@@ -190,7 +174,7 @@ def add_x_stock(message):
 
 @bot.message_handler(commands=['addmail'])
 def add_mail_stock(message):
-    if not is_admin(message.from_user): return
+    if not is_admin(message.from_user.id): return
     accounts = message.text.replace("/addmail", "").strip().split("\n")
     valid_accs = [a.strip() for a in accounts if a.strip()]
     if not valid_accs:
@@ -206,7 +190,7 @@ def add_mail_stock(message):
 
 @bot.message_handler(commands=['clearx'])
 def clear_x_stock(message):
-    if not is_admin(message.from_user): return
+    if not is_admin(message.from_user.id): return
     conn = sqlite3.connect("bot_vault.db")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM stock WHERE category='x'")
@@ -216,7 +200,7 @@ def clear_x_stock(message):
 
 @bot.message_handler(commands=['clearmail'])
 def clear_mail_stock(message):
-    if not is_admin(message.from_user): return
+    if not is_admin(message.from_user.id): return
     conn = sqlite3.connect("bot_vault.db")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM stock WHERE category='mail'")
@@ -225,59 +209,14 @@ def clear_mail_stock(message):
     bot.send_message(message.chat.id, "🗑️ Outlook Mail Stock အားလုံးကို ဖျက်ပြီးပါပြီ။")
 
 # ---------------------------------------------------------
-# CORE WEBHOOK SYSTEM (ပြင်ဆင်ထားသော အပိုင်း)
+# BOT RUNNER (POLLING METHOD) - No Webhook Required
 # ---------------------------------------------------------
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def webhook():
-    # Telegram မှ Update များကို အလွယ်တကူ လက်ခံနိုင်ရန် ပြင်ဆင်ထားသည်
-    json_string = request.get_data().decode('utf-8')
-    update = telebot.types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return 'OK', 200
-
-@app.route('/')
-def index():
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
-    return f"<h1>Bot is Running!</h1><p>Webhook successfully set to: {WEBHOOK_URL}</p>", 200
-
-# ---------------------------------------------------------
-# NOWPAYMENTS WEBHOOK
-# ---------------------------------------------------------
-@app.route('/nowpayments_webhook', methods=['POST'])
-def nowpayments_webhook():
-    data = request.json
-    if data and data.get('payment_status') in ['finished', 'confirmed']:
-        payment_id = str(data.get('payment_id'))
-        
-        conn = sqlite3.connect("bot_vault.db")
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, category, qty, status FROM orders WHERE payment_id=?", (payment_id,))
-        order = cursor.fetchone()
-        
-        if order and order[3] == 'waiting':
-            user_id, category, qty, _ = order
-            cursor.execute("SELECT id, account_data FROM stock WHERE category=? LIMIT ?", (category, qty))
-            items = cursor.fetchall()
-            
-            if len(items) >= qty:
-                delivered_items = []
-                date_now = time.strftime("%Y-%m-%d %H:%M:%S")
-                for item_id, acc_data in items:
-                    delivered_items.append(acc_data)
-                    cursor.execute("DELETE FROM stock WHERE id=?", (item_id,))
-                    cursor.execute("INSERT INTO history (user_id, category, account_data, amount, date) VALUES (?, ?, ?, 0, ?)",
-                                   (user_id, category, acc_data, date_now))
-                
-                cursor.execute("UPDATE orders SET status='finished' WHERE payment_id=?", (payment_id,))
-                conn.commit()
-                
-                acc_text = "\n".join([f"`{acc}`" for acc in delivered_items])
-                success_msg = f"✅ *Payment Received & Confirmed!*\n\nသင့်အကောင့်(များ) ရောက်ရှိပါပြီ:\n\n{acc_text}\n\nဝယ်ယူအားပေးမှုကို ကျေးဇူးတင်ပါသည်။"
-                bot.send_message(user_id, success_msg, parse_mode="Markdown")
-
-        conn.close()
-    return "OK", 200
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    print("Bot is starting via Polling...")
+    bot.remove_webhook()
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0, timeout=20)
+        except Exception as e:
+            print(f"Polling error: {e}")
+            time.sleep(5)
