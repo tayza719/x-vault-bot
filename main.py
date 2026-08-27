@@ -1,20 +1,20 @@
 import os
 import sqlite3
-import json
 import time
 import requests
-from flask import Flask, request
+from flask import Flask, request, abort
 import telebot
 from telebot import types
-import threading
 
 # ---------------------------------------------------------
-# CONFIGURATION
+# CONFIGURATION (အသေ သတ်မှတ်ထားပါသည်)
 # ---------------------------------------------------------
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8683965691:AAEthMpBt_RJNY1NPNDPtH-hSnTcpWFU0L8")
-NOWPAYMENTS_API_KEY = os.environ.get("NOWPAYMENTS_API_KEY", "YOUR_NOWPAYMENTS_API_KEY")
+BOT_TOKEN = "8683965691:AAEthMpBt_RJNY1NPNDPtH-hSnTcpWFU0L8"
+HEROKU_APP_NAME = "x-vault-bot-20----26"
 ADMIN_ID = 7613605178
-HEROKU_APP_NAME = os.environ.get("HEROKU_APP_NAME", "x-vault-bot-20----26")
+NOWPAYMENTS_API_KEY = os.environ.get("NOWPAYMENTS_API_KEY", "test_key")
+
+WEBHOOK_URL = f"https://{HEROKU_APP_NAME}.herokuapp.com/{BOT_TOKEN}"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -51,7 +51,7 @@ def init_db():
 init_db()
 
 def is_admin(user):
-    return user.id == ADMIN_ID or str(user.id) == str(os.environ.get("ADMIN_ID", ADMIN_ID))
+    return str(user.id) == str(ADMIN_ID)
 
 # ---------------------------------------------------------
 # NOWPAYMENTS API FUNCTIONS
@@ -177,7 +177,7 @@ def add_x_stock(message):
     accounts = message.text.replace("/addx", "").strip().split("\n")
     valid_accs = [a.strip() for a in accounts if a.strip()]
     if not valid_accs:
-        bot.send_message(message.chat.id, "⚠️ ထည့်သွင်းမည့် X Stock Data ထည့်ပေးပါ (ဥပမာ- `/addx user|pass`)")
+        bot.send_message(message.chat.id, "⚠️ ထည့်သွင်းမည့် X Stock Data ထည့်ပေးပါ")
         return
     conn = sqlite3.connect("bot_vault.db")
     cursor = conn.cursor()
@@ -193,7 +193,7 @@ def add_mail_stock(message):
     accounts = message.text.replace("/addmail", "").strip().split("\n")
     valid_accs = [a.strip() for a in accounts if a.strip()]
     if not valid_accs:
-        bot.send_message(message.chat.id, "⚠️ ထည့်သွင်းမည့် Mail Stock Data ထည့်ပေးပါ (ဥပမာ- `/addmail mail|pass`)")
+        bot.send_message(message.chat.id, "⚠️ ထည့်သွင်းမည့် Mail Stock Data ထည့်ပေးပါ")
         return
     conn = sqlite3.connect("bot_vault.db")
     cursor = conn.cursor()
@@ -223,14 +223,25 @@ def clear_mail_stock(message):
     conn.close()
     bot.send_message(message.chat.id, "🗑️ Outlook Mail Stock အားလုံးကို ဖျက်ပြီးပါပြီ။")
 
-@bot.message_handler(commands=['backup'])
-def backup_db(message):
-    if not is_admin(message.from_user): return
-    try:
-        with open("bot_vault.db", "rb") as doc:
-            bot.send_document(message.chat.id, doc, caption="📦 Database Backup File")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Backup ယူ၍ မရပါ: {e}")
+# ---------------------------------------------------------
+# CORE WEBHOOK SYSTEM
+# ---------------------------------------------------------
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return '', 200
+    else:
+        abort(403)
+
+@app.route('/')
+def index():
+    # Website (URL) ကို ဝင်လိုက်တာနဲ့ Webhook ကို အလိုလို Set လုပ်ပေးမည့် စနစ်
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL)
+    return f"<h1>Bot is Running!</h1><p>Webhook successfully set to: {WEBHOOK_URL}</p>", 200
 
 # ---------------------------------------------------------
 # NOWPAYMENTS WEBHOOK
@@ -270,15 +281,5 @@ def nowpayments_webhook():
         conn.close()
     return "OK", 200
 
-@app.route('/')
-def index():
-    return "Bot Server is Running!", 200
-
-def run_bot():
-    bot.remove_webhook()
-    bot.polling(none_stop=True)
-
 if __name__ == "__main__":
-    t = threading.Thread(target=run_bot)
-    t.start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
