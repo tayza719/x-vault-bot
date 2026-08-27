@@ -6,6 +6,7 @@ import requests
 from flask import Flask, request
 import telebot
 from telebot import types
+import threading
 
 # ---------------------------------------------------------
 # CONFIGURATION
@@ -15,7 +16,7 @@ NOWPAYMENTS_API_KEY = os.environ.get("NOWPAYMENTS_API_KEY", "YOUR_NOWPAYMENTS_AP
 ADMIN_ID = 7613605178
 HEROKU_APP_NAME = os.environ.get("HEROKU_APP_NAME", "x-vault-bot-20----26")
 
-bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
+bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
 # ---------------------------------------------------------
@@ -232,18 +233,6 @@ def backup_db(message):
         bot.send_message(message.chat.id, f"❌ Backup ယူ၍ မရပါ: {e}")
 
 # ---------------------------------------------------------
-# TELEGRAM WEBHOOK ROUTE (IMPORTANT FIX)
-# ---------------------------------------------------------
-@app.route(f"/{BOT_TOKEN}", methods=['POST'])
-def telegram_webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return "OK", 200
-    return "Forbidden", 403
-
-# ---------------------------------------------------------
 # NOWPAYMENTS WEBHOOK
 # ---------------------------------------------------------
 @app.route('/nowpayments_webhook', methods=['POST'])
@@ -285,5 +274,11 @@ def nowpayments_webhook():
 def index():
     return "Bot Server is Running!", 200
 
+def run_bot():
+    bot.remove_webhook()
+    bot.polling(none_stop=True)
+
 if __name__ == "__main__":
+    t = threading.Thread(target=run_bot)
+    t.start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
