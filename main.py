@@ -12,9 +12,10 @@ from telebot import types
 # ---------------------------------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8683965691:AAEthMpBt_RJNY1NPNDPtH-hSnTcpWFU0L8")
 NOWPAYMENTS_API_KEY = os.environ.get("NOWPAYMENTS_API_KEY", "YOUR_NOWPAYMENTS_API_KEY")
-ADMIN_ID = 7613605178  # သင့် Telegram Numeric ID
+ADMIN_ID = 7613605178
+HEROKU_APP_NAME = os.environ.get("HEROKU_APP_NAME", "x-vault-bot-20----26")
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
 
 # ---------------------------------------------------------
@@ -23,13 +24,11 @@ app = Flask(__name__)
 def init_db():
     conn = sqlite3.connect("bot_vault.db")
     cursor = conn.cursor()
-    # Stock Table
     cursor.execute('''CREATE TABLE IF NOT EXISTS stock (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         category TEXT,
                         account_data TEXT
                     )''')
-    # Transactions / History Table
     cursor.execute('''CREATE TABLE IF NOT EXISTS history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER,
@@ -38,7 +37,6 @@ def init_db():
                         amount REAL,
                         date TEXT
                     )''')
-    # Orders Table (Pending Payments)
     cursor.execute('''CREATE TABLE IF NOT EXISTS orders (
                         payment_id TEXT PRIMARY KEY,
                         user_id INTEGER,
@@ -52,7 +50,6 @@ def init_db():
 init_db()
 
 def is_admin(user):
-    """Admin ID မှန်မမှန် စစ်ဆေးခြင်း"""
     return user.id == ADMIN_ID or str(user.id) == str(os.environ.get("ADMIN_ID", ADMIN_ID))
 
 # ---------------------------------------------------------
@@ -64,13 +61,12 @@ def create_nowpayments_invoice(amount_usd, order_id):
         "x-api-key": NOWPAYMENTS_API_KEY,
         "Content-Type": "application/json"
     }
-    app_name = os.environ.get('HEROKU_APP_NAME', 'your-app-name')
     payload = {
         "price_amount": amount_usd,
         "price_currency": "usd",
         "order_id": order_id,
         "order_description": "Vault Bot Purchase",
-        "ipn_callback_url": f"https://{app_name}.herokuapp.com/nowpayments_webhook",
+        "ipn_callback_url": f"https://{HEROKU_APP_NAME}.herokuapp.com/nowpayments_webhook",
         "success_url": "https://t.me",
         "cancel_url": "https://t.me"
     }
@@ -145,12 +141,10 @@ def process_qty(message, category, unit_price):
         total_price = round(qty * unit_price, 2)
         order_id = f"ORD-{int(time.time())}-{message.from_user.id}"
         
-        # Payment Link/Invoice ဆောက်ခြင်း
         invoice = create_nowpayments_invoice(total_price, order_id)
         if invoice and "invoice_url" in invoice:
             payment_id = str(invoice["id"])
             
-            # Save Pending Order
             conn = sqlite3.connect("bot_vault.db")
             cursor = conn.cursor()
             cursor.execute("INSERT INTO orders VALUES (?, ?, ?, ?, 'waiting')", 
@@ -174,18 +168,16 @@ def process_qty(message, category, unit_price):
         bot.send_message(message.chat.id, "❌ ကျေးဇူးပြု၍ ဂဏန်း အမှန် ရိုက်ထည့်ပါ။")
 
 # ---------------------------------------------------------
-# ADMIN COMMANDS (Add, Clear, Backup)
+# ADMIN COMMANDS
 # ---------------------------------------------------------
 @bot.message_handler(commands=['addx'])
 def add_x_stock(message):
     if not is_admin(message.from_user): return
     accounts = message.text.replace("/addx", "").strip().split("\n")
     valid_accs = [a.strip() for a in accounts if a.strip()]
-    
     if not valid_accs:
         bot.send_message(message.chat.id, "⚠️ ထည့်သွင်းမည့် X Stock Data ထည့်ပေးပါ (ဥပမာ- `/addx user|pass`)")
         return
-
     conn = sqlite3.connect("bot_vault.db")
     cursor = conn.cursor()
     for acc in valid_accs:
@@ -199,11 +191,9 @@ def add_mail_stock(message):
     if not is_admin(message.from_user): return
     accounts = message.text.replace("/addmail", "").strip().split("\n")
     valid_accs = [a.strip() for a in accounts if a.strip()]
-    
     if not valid_accs:
         bot.send_message(message.chat.id, "⚠️ ထည့်သွင်းမည့် Mail Stock Data ထည့်ပေးပါ (ဥပမာ- `/addmail mail|pass`)")
         return
-
     conn = sqlite3.connect("bot_vault.db")
     cursor = conn.cursor()
     for acc in valid_accs:
@@ -242,7 +232,19 @@ def backup_db(message):
         bot.send_message(message.chat.id, f"❌ Backup ယူ၍ မရပါ: {e}")
 
 # ---------------------------------------------------------
-# NOWPAYMENTS WEBHOOK (AUTO DELIVERY ENGINE)
+# TELEGRAM WEBHOOK ROUTE (IMPORTANT FIX)
+# ---------------------------------------------------------
+@app.route(f"/{BOT_TOKEN}", methods=['POST'])
+def telegram_webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return "OK", 200
+    return "Forbidden", 403
+
+# ---------------------------------------------------------
+# NOWPAYMENTS WEBHOOK
 # ---------------------------------------------------------
 @app.route('/nowpayments_webhook', methods=['POST'])
 def nowpayments_webhook():
@@ -252,20 +254,17 @@ def nowpayments_webhook():
         
         conn = sqlite3.connect("bot_vault.db")
         cursor = conn.cursor()
-        
         cursor.execute("SELECT user_id, category, qty, status FROM orders WHERE payment_id=?", (payment_id,))
         order = cursor.fetchone()
         
         if order and order[3] == 'waiting':
             user_id, category, qty, _ = order
-            
             cursor.execute("SELECT id, account_data FROM stock WHERE category=? LIMIT ?", (category, qty))
             items = cursor.fetchall()
             
             if len(items) >= qty:
                 delivered_items = []
                 date_now = time.strftime("%Y-%m-%d %H:%M:%S")
-                
                 for item_id, acc_data in items:
                     delivered_items.append(acc_data)
                     cursor.execute("DELETE FROM stock WHERE id=?", (item_id,))
@@ -282,9 +281,6 @@ def nowpayments_webhook():
         conn.close()
     return "OK", 200
 
-# ---------------------------------------------------------
-# HEROKU WEBHOOK/SERVER RUNNER
-# ---------------------------------------------------------
 @app.route('/')
 def index():
     return "Bot Server is Running!", 200
