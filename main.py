@@ -508,10 +508,9 @@ if __name__ == "__main__":
     # Start Flask
     def run_flask():
         port = int(os.environ.get("PORT", 5000))
-        app.run(host="0.0.0.0", port=port)
+        app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
     
-    thread = threading.Thread(target=run_flask)
-    thread.daemon = True
+    thread = threading.Thread(target=run_flask, daemon=True)
     thread.start()
     
     # Start Bot
