@@ -2,12 +2,12 @@ import os
 import sqlite3
 import time
 import requests
-from flask import Flask, request, abort
+from flask import Flask, request
 import telebot
 from telebot import types
 
 # ---------------------------------------------------------
-# CONFIGURATION (အသေ သတ်မှတ်ထားပါသည်)
+# CONFIGURATION
 # ---------------------------------------------------------
 BOT_TOKEN = "8683965691:AAEthMpBt_RJNY1NPNDPtH-hSnTcpWFU0L8"
 HEROKU_APP_NAME = "x-vault-bot-20----26"
@@ -16,7 +16,8 @@ NOWPAYMENTS_API_KEY = os.environ.get("NOWPAYMENTS_API_KEY", "test_key")
 
 WEBHOOK_URL = f"https://{HEROKU_APP_NAME}.herokuapp.com/{BOT_TOKEN}"
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# Webhook သုံးလျှင် Threading ပိတ်ထားခြင်းက ပိုမို တည်ငြိမ်စေပါသည်
+bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 app = Flask(__name__)
 
 # ---------------------------------------------------------
@@ -224,21 +225,18 @@ def clear_mail_stock(message):
     bot.send_message(message.chat.id, "🗑️ Outlook Mail Stock အားလုံးကို ဖျက်ပြီးပါပြီ။")
 
 # ---------------------------------------------------------
-# CORE WEBHOOK SYSTEM
+# CORE WEBHOOK SYSTEM (ပြင်ဆင်ထားသော အပိုင်း)
 # ---------------------------------------------------------
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return '', 200
-    else:
-        abort(403)
+    # Telegram မှ Update များကို အလွယ်တကူ လက်ခံနိုင်ရန် ပြင်ဆင်ထားသည်
+    json_string = request.get_data().decode('utf-8')
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return 'OK', 200
 
 @app.route('/')
 def index():
-    # Website (URL) ကို ဝင်လိုက်တာနဲ့ Webhook ကို အလိုလို Set လုပ်ပေးမည့် စနစ်
     bot.remove_webhook()
     bot.set_webhook(url=WEBHOOK_URL)
     return f"<h1>Bot is Running!</h1><p>Webhook successfully set to: {WEBHOOK_URL}</p>", 200
