@@ -120,7 +120,7 @@ def get_crypto_amount(usd_amount: float, coin: str) -> float:
         logging.error(f"Price Error: {e}")
         return None
 
-# --- BLOCKCHAIN EXPLORER BALANCE CHECKER ---
+# --- BLOCKCHAIN RPC/EXPLORER BALANCE CHECKER (NO API KEY REQUIRED) ---
 def check_blockchain_balance(address: str, coin: str) -> float:
     try:
         if coin == "sol":
@@ -128,10 +128,21 @@ def check_blockchain_balance(address: str, coin: str) -> float:
             payload = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [address]}
             res = requests.post(url, json=payload, timeout=10).json()
             return res['result']['value'] / 1e9
+
         elif coin == "pol":
-            url = f"https://api.polygonscan.com/api?module=account&action=balance&address={address}"
-            res = requests.get(url, timeout=10).json()
-            return int(res['result']) / 1e18
+            url = "https://polygon-bor-rpc.publicnode.com"
+            payload = {"jsonrpc": "2.0", "id": 1, "method": "eth_getBalance", "params": [address, "latest"]}
+            res = requests.post(url, json=payload, timeout=10).json()
+            hex_bal = res.get('result', '0x0')
+            return int(hex_bal, 16) / 1e18
+
+        elif coin == "bnb":
+            url = "https://bsc-rpc.publicnode.com"
+            payload = {"jsonrpc": "2.0", "id": 1, "method": "eth_getBalance", "params": [address, "latest"]}
+            res = requests.post(url, json=payload, timeout=10).json()
+            hex_bal = res.get('result', '0x0')
+            return int(hex_bal, 16) / 1e18
+
         elif coin == "trx":
             url = f"https://api.trongrid.io/v1/accounts/{address}"
             res = requests.get(url, timeout=10).json()
@@ -139,7 +150,7 @@ def check_blockchain_balance(address: str, coin: str) -> float:
                 return res['data'][0]['balance'] / 1e6
             return 0.0
     except Exception as e:
-        logging.error(f"Blockchain Check Error: {e}")
+        logging.error(f"Blockchain Check Error ({coin}): {e}")
     return 0.0
 
 # --- USER HANDLERS ---
@@ -162,9 +173,9 @@ def handle_query(call):
         outlook_stock = get_stock_count('outlook')
         
         if lang == "mm":
-            welcome_text = f"🛒 **Vault Store မှ ကြိုဆိုပါတယ်**\n\n🔹 X Stock: `{x_stock}` (Price: ${PRICES['x']})\n🔹 Outlook Stock: `{outlook_stock}` (Price: ${PRICES['outlook']})\n\nဝယ်ယူလိုသော အမျိုးအစားကို ရွေးချယ်ပါ -"
+            welcome_text = f"🛒 **Alpha Vault Store မှ ကြိုဆိုပါတယ်**\n\n🔹 X Stock: `{x_stock}` (Price: ${PRICES['x']})\n🔹 Outlook Stock: `{outlook_stock}` (Price: ${PRICES['outlook']})\n\nဝယ်ယူလိုသော အမျိုးအစားကို ရွေးချယ်ပါ -"
         else:
-            welcome_text = f"🛒 **Welcome to Vault Store**\n\n🔹 X Stock: `{x_stock}` (Price: ${PRICES['x']})\n🔹 Outlook Stock: `{outlook_stock}` (Price: ${PRICES['outlook']})\n\nPlease select category to buy -"
+            welcome_text = f"🛒 **Welcome to Alpha Vault Store**\n\n🔹 X Stock: `{x_stock}` (Price: ${PRICES['x']})\n🔹 Outlook Stock: `{outlook_stock}` (Price: ${PRICES['outlook']})\n\nPlease select category to buy -"
 
         markup = types.InlineKeyboardMarkup()
         markup.add(
@@ -366,7 +377,18 @@ def handle_query(call):
                 bot.send_message(user_id, success_msg, parse_mode="Markdown")
                 bot.answer_callback_query(call.id, "Success!", show_alert=False)
                 
-                # User ဝယ်ယူပြီးလျှင် Admin ဆီ DB Auto Backup ပို့ပေးခြင်း
+                # Admin ထံ Noti ပို့ခြင်း
+                admin_noti = f"🔔 **[NEW PURCHASE ALERT]**\n\n" \
+                             f"👤 **Buyer User ID:** `{user_id}`\n" \
+                             f"🆔 **Order ID:** `#{order_id}`\n" \
+                             f"📦 **Category:** `{category.upper()}` ({qty} accs)\n" \
+                             f"🪙 **Amount Received:** `{current_balance} {coin.upper()}`\n" \
+                             f"📍 **Address:** `{address}`"
+                try:
+                    bot.send_message(ADMIN_ID, admin_noti, parse_mode="Markdown")
+                except Exception as e:
+                    logging.error(f"Failed to send Admin Noti: {e}")
+
                 auto_backup_to_admin(f"User {user_id} bought {qty} {category.upper()} (Order #{order_id})")
             else:
                 alert_msg = "Stock မလုံလောက်ပါ။ Admin ကို ဆက်သွယ်ပါ။" if lang == "mm" else "Insufficient stock! Please contact Admin."
@@ -381,14 +403,21 @@ def handle_query(call):
 @bot.message_handler(commands=['addacc'])
 def add_acc(message):
     if message.from_user.id != ADMIN_ID: return
-    text = message.text.replace("/addacc", "").strip()
-    parts = text.split(" ", 1)
-    if len(parts) < 2 or parts[0].lower() not in ['x', 'outlook']:
-        bot.reply_to(message, "⚠️ ပုံစံအမှန်: `/addacc x user|pass` သို့မဟုတ် `/addacc outlook email|pass`", parse_mode="Markdown")
+    raw_text = message.text.replace("/addacc", "").strip()
+    if not raw_text:
+        bot.reply_to(message, "⚠️ ပုံစံအမှန်: `/addacc x user|pass|link` သို့မဟုတ် `/addacc outlook email|pass|link`", parse_mode="Markdown")
         return
-    
+
+    parts = raw_text.split(maxsplit=1)
     category = parts[0].lower()
-    acc_lines = [line.strip() for line in parts[1].split("\n") if line.strip()]
+
+    if category not in ['x', 'outlook'] or len(parts) < 2:
+        bot.reply_to(message, "⚠️ ကျေးဇူးပြု၍ Category အမျိုးအစား (x သို့မဟုတ် outlook) ပါဝင်အောင် ထည့်ပေးပါ!\n\nဥပမာ: `/addacc x user|pass|link`", parse_mode="Markdown")
+        return
+
+    acc_data = parts[1].strip()
+    acc_lines = [line.strip() for line in acc_data.split("\n") if line.strip()]
+    
     added = add_accounts_to_db(category, acc_lines)
     bot.reply_to(message, f"✅ **{category.upper()}** Stock အသစ် `{added}` ကောင့် ထည့်ပြီးပါပြီ။", parse_mode="Markdown")
 
@@ -430,7 +459,6 @@ def check_stock(message):
           f"🔹 **Total Sold:** `{total_sold}` accs"
     bot.reply_to(message, msg, parse_mode="Markdown")
 
-# လက်ရှိ ရောင်းမထွက်သေးဘဲ ကျန်နေသည့် Stock အားလုံးကို Text File ပို့ပေးခြင်း: /allstock
 @bot.message_handler(commands=['allstock'])
 def send_all_stock(message):
     if message.from_user.id != ADMIN_ID: return
@@ -454,7 +482,6 @@ def send_all_stock(message):
         bot.send_document(ADMIN_ID, f, caption=f"📦 **Available Stock List** ({len(rows)} accounts)")
     os.remove(file_path)
 
-# History နောက်ဆုံး ၁၀ ခု ကြည့်ရန်: /history
 @bot.message_handler(commands=['history'])
 def show_history(message):
     if message.from_user.id != ADMIN_ID: return
@@ -475,7 +502,6 @@ def show_history(message):
         
     bot.reply_to(message, history_text, parse_mode="Markdown")
 
-# Order စာရင်း အကုန်လုံးကို Text File ပို့ပေးခြင်း: /allhistory
 @bot.message_handler(commands=['allhistory'])
 def show_all_history(message):
     if message.from_user.id != ADMIN_ID: return
@@ -555,6 +581,16 @@ def force_pay(message):
                       
         bot.send_message(user_id, success_msg, parse_mode="Markdown")
         bot.reply_to(message, f"✅ Order `#{order_id}` ကို Force Pay ဖြင့် အကောင့်ထုတ်ပေးလိုက်ပါပြီ။")
+        
+        admin_noti = f"🔧 **[FORCE PAY EXECUTED]**\n\n" \
+                     f"👤 **Buyer User ID:** `{user_id}`\n" \
+                     f"🆔 **Order ID:** `#{order_id}`\n" \
+                     f"📦 **Category:** `{category.upper()}` ({qty} accs)"
+        try:
+            bot.send_message(ADMIN_ID, admin_noti, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Failed to send Admin Noti: {e}")
+
         auto_backup_to_admin(f"Force Pay Order #{order_id}")
     else:
         bot.reply_to(message, f"❌ Stock မလုံလောက်ပါ။ (လိုအပ်ချက်: {qty})")
