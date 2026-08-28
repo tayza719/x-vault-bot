@@ -4,9 +4,7 @@ import sqlite3
 import datetime
 import requests
 import telebot
-import threading
 from telebot import types
-from flask import Flask
 from bip_utils import Bip39SeedGenerator, Bip44, Bip44Coins, Bip44Changes
 
 # Environment Variables (Heroku Config Vars မှ ဖတ်ယူမည်)
@@ -19,7 +17,6 @@ PRICE_USD = 1.0  # အကောင့် ၁ ကောင့်လျှင် �
 
 logging.basicConfig(level=logging.INFO)
 bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__)
 
 # Database စတင်ဖွဲ့စည်းခြင်း
 def init_db():
@@ -298,11 +295,6 @@ def add_acc(message):
     added = add_accounts_to_db(category, acc_lines)
     bot.reply_to(message, f"✅ **{category.upper()}** Stock အသစ် `{added}` ကောင့် ထည့်ပြီးပါပြီ။")
 
-@app.route('/')
-def index():
-    return "Vault Bot Server is Running!"
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    threading.Thread(target=lambda: bot.infinity_polling()).start()
-    app.run(host="0.0.0.0", port=port)
+    print("Bot is running as worker...")
+    bot.infinity_polling(skip_pending=True)
