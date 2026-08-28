@@ -1,424 +1,336 @@
+import logging
 import os
 import sqlite3
-import time
+import datetime
+import shutil
 import requests
-import telebot
-from telebot import types
-from flask import Flask, request
-import threading
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# ---------------------------------------------------------
-# CONFIGURATION
-# ---------------------------------------------------------
-BOT_TOKEN = "8683965691:AAEthMpBt_RJNY1NPNDPtH-hSnTcpWFU0L8"
-ADMIN_ID = 7613605178
-NOWPAYMENTS_API_KEY = os.environ.get("NOWPAYMENTS_API_KEY", "test_key")
-HEROKU_APP_NAME = os.environ.get("HEROKU_APP_NAME", "x-vault-bot-20----26")
+# --- Config Setup (From Heroku Environment Variables) ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7613605178"))
+NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY")
 
-bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__)
+ADMIN_USERNAME = "EchoWhisper"
+DB_FILE = "store.db"
+BANNED_FILE = "banned_users.txt"
+BACKUP_DIR = "backups"
+PRICE_USDT = 0.15
 
-# ---------------------------------------------------------
-# DATABASE
-# ---------------------------------------------------------
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+
+# --- Database Setup & Helpers ---
 def init_db():
-    conn = sqlite3.connect("bot_vault.db")
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS stock (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT, account_data TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance REAL DEFAULT 0.0)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, category TEXT, account_data TEXT, amount REAL, date TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS orders (payment_id TEXT PRIMARY KEY, user_id INTEGER, amount REAL, status TEXT)''')
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_info TEXT UNIQUE,
+            status TEXT DEFAULT 'available',
+            buyer_id INTEGER,
+            sold_at TEXT
+        )
+    """)
     conn.commit()
     conn.close()
+
+def backup_db():
+    if not os.path.exists(BACKUP_DIR):
+        os.makedirs(BACKUP_DIR)
+    mm_now = datetime.datetime.utcnow() + datetime.timedelta(hours=6, minutes=30)
+    backup_filename = f"{BACKUP_DIR}/store_backup_{mm_now.strftime('%Y%m%d_%H%M%S')}.db"
+    shutil.copy2(DB_FILE, backup_filename)
+    return backup_filename
 
 init_db()
 
-def is_admin(user_id):
-    return str(user_id) == str(ADMIN_ID)
+def get_banned_users():
+    if not os.path.exists(BANNED_FILE):
+        return set()
+    with open(BANNED_FILE, "r", encoding="utf-8") as f:
+        return set(line.strip() for line in f if line.strip())
 
-def get_balance(user_id):
-    conn = sqlite3.connect("bot_vault.db")
-    c = conn.cursor()
-    c.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    res = c.fetchone()
-    if not res:
-        c.execute("INSERT INTO users (user_id, balance) VALUES (?, 0.0)", (user_id,))
-        conn.commit()
-        balance = 0.0
-    else:
-        balance = res[0]
-    conn.close()
-    return balance
+def ban_user(user_id):
+    banned = get_banned_users()
+    banned.add(str(user_id))
+    with open(BANNED_FILE, "w", encoding="utf-8") as f:
+        for u in banned:
+            f.write(f"{u}\n")
 
-def update_balance(user_id, amount):
-    conn = sqlite3.connect("bot_vault.db")
-    c = conn.cursor()
-    c.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, user_id))
-    conn.commit()
-    conn.close()
+def unban_user(user_id):
+    banned = get_banned_users()
+    banned.discard(str(user_id))
+    with open(BANNED_FILE, "w", encoding="utf-8") as f:
+        for u in banned:
+            f.write(f"{u}\n")
 
-def get_stock(category):
-    conn = sqlite3.connect("bot_vault.db")
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM stock WHERE category=?", (category,))
-    count = c.fetchone()[0]
+def get_stock_count():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM accounts WHERE status = 'available'")
+    count = cursor.fetchone()[0]
     conn.close()
     return count
 
-def add_stock(category, data):
-    conn = sqlite3.connect("bot_vault.db")
-    c = conn.cursor()
-    c.execute("INSERT INTO stock (category, account_data) VALUES (?, ?)", (category, data))
+def add_accounts_to_db(acc_list):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    added = 0
+    for acc in acc_list:
+        try:
+            cursor.execute("INSERT INTO accounts (account_info, status) VALUES (?, 'available')", (acc,))
+            added += 1
+        except sqlite3.IntegrityError:
+            pass
     conn.commit()
     conn.close()
+    return added
 
-def clear_stock(category):
-    conn = sqlite3.connect("bot_vault.db")
-    c = conn.cursor()
-    c.execute("DELETE FROM stock WHERE category=?", (category,))
+def pop_accounts_from_db(qty, buyer_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, account_info FROM accounts WHERE status = 'available' LIMIT ?", (qty,))
+    rows = cursor.fetchall()
+    if len(rows) < qty:
+        conn.close()
+        return None
+    delivered = []
+    mm_now = datetime.datetime.utcnow() + datetime.timedelta(hours=6, minutes=30)
+    now_str = mm_now.strftime("%Y-%m-%d %H:%M:%S")
+    for row in rows:
+        acc_id, acc_info = row[0], row[1]
+        delivered.append(acc_info)
+        cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = ?, sold_at = ? WHERE id = ?", (buyer_id, now_str, acc_id))
     conn.commit()
     conn.close()
+    return delivered
 
-def get_history(user_id):
-    conn = sqlite3.connect("bot_vault.db")
-    c = conn.cursor()
-    c.execute("SELECT category, account_data, date FROM history WHERE user_id=? ORDER BY id DESC LIMIT 5", (user_id,))
-    res = c.fetchall()
-    conn.close()
-    return res
+async def check_banned(update: Update) -> bool:
+    user = update.effective_user
+    if user and str(user.id) in get_banned_users():
+        if update.message:
+            await update.message.reply_text("🚫 အကောင့်ကို ဘော့တ်အသုံးပြုခွင့် ပိတ်ပင် (Ban) ထားပါသည်။", parse_mode="Markdown")
+        elif update.callback_query:
+            await update.callback_query.answer("Banned User.", show_alert=True)
+        return True
+    return False
 
-# ---------------------------------------------------------
-# NOWPAYMENTS
-# ---------------------------------------------------------
-def create_invoice(amount, order_id):
+# --- NOWPayments API Helper ---
+def create_nowpayments_invoice(amount, order_id, description):
     url = "https://api.nowpayments.io/v1/invoice"
-    headers = {"x-api-key": NOWPAYMENTS_API_KEY, "Content-Type": "application/json"}
+    headers = {
+        "x-api-key": NOWPAYMENTS_API_KEY,
+        "Content-Type": "application/json"
+    }
     payload = {
         "price_amount": amount,
         "price_currency": "usd",
-        "order_id": order_id,
-        "order_description": "Deposit",
-        "ipn_callback_url": f"https://{HEROKU_APP_NAME}.herokuapp.com/webhook",
-        "success_url": "https://t.me",
-        "cancel_url": "https://t.me"
+        "pay_currency": "usdttrc20",
+        "order_id": str(order_id),
+        "order_description": description
     }
     try:
-        r = requests.post(url, json=payload, headers=headers, timeout=30)
-        if r.status_code == 200:
-            return r.json()
-    except:
-        pass
+        res = requests.post(url, json=payload, headers=headers)
+        if res.status_code == 200 or res.status_code == 201:
+            return res.json().get("invoice_url")
+    except Exception as e:
+        logging.error(f"NOWPayments Error: {e}")
     return None
 
-def save_order(payment_id, user_id, amount):
-    conn = sqlite3.connect("bot_vault.db")
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO orders (payment_id, user_id, amount, status) VALUES (?, ?, ?, 'waiting')", (payment_id, user_id, amount))
-    conn.commit()
-    conn.close()
+# --- User UI Handlers ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await check_banned(update): return
+    keyboard = [
+        [InlineKeyboardButton("🇲🇲 မြန်မာစာ", callback_data="lang_mm"), InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")]
+    ]
+    await update.message.reply_text("🌐 **ကျေးဇူးပြု၍ ဘာသာစကား ရွေးချယ်ပါ**\n **Please select your language**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-def get_order(payment_id):
-    conn = sqlite3.connect("bot_vault.db")
-    c = conn.cursor()
-    c.execute("SELECT user_id, amount, status FROM orders WHERE payment_id=?", (payment_id,))
-    res = c.fetchone()
-    conn.close()
-    return res
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await check_banned(update): return
+    query = update.callback_query
+    await query.answer()
+    data = query.data
 
-def update_order(payment_id, status):
-    conn = sqlite3.connect("bot_vault.db")
-    c = conn.cursor()
-    c.execute("UPDATE orders SET status=? WHERE payment_id=?", (status, payment_id))
-    conn.commit()
-    conn.close()
+    if data.startswith("lang_"):
+        context.user_data['lang'] = data.split("_")[1]
+        data = "show_home"
 
-# ---------------------------------------------------------
-# BOT COMMANDS
-# ---------------------------------------------------------
-@bot.message_handler(commands=['start'])
-def start(message):
-    user_id = message.from_user.id
-    balance = get_balance(user_id)
-    
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("🛒 Buy X ($0.15)", callback_data="buy_x"),
-        types.InlineKeyboardButton("📧 Buy Mail ($0.10)", callback_data="buy_mail"),
-        types.InlineKeyboardButton("💳 Deposit", callback_data="deposit"),
-        types.InlineKeyboardButton("📜 History", callback_data="history"),
-        types.InlineKeyboardButton("💰 Balance", callback_data="balance")
-    )
-    if is_admin(user_id):
-        markup.add(types.InlineKeyboardButton("🔐 Admin", callback_data="admin"))
-    
-    bot.send_message(
-        message.chat.id,
-        f"✨ X Vault Bot ✨\n\n👤 ID: `{user_id}`\n💰 Balance: ${balance:.2f}\n\nရွေးချယ်ပါ-",
-        parse_mode="Markdown",
-        reply_markup=markup
-    )
+    lang = context.user_data.get('lang', 'mm')
 
-@bot.callback_query_handler(func=lambda call: True)
-def callback(call):
-    user_id = call.from_user.id
-    
-    if call.data == "buy_x":
-        stock = get_stock('x')
-        if stock == 0:
-            bot.send_message(call.message.chat.id, "❌ X Account မရှိပါ")
-            return
-        bot.send_message(call.message.chat.id, f"🛒 X Account ($0.15)\nStock: {stock}\n\nအရေအတွက် ရိုက်ထည့်ပါ:")
-        bot.register_next_step_handler(call.message, purchase, 'x', 0.15)
-    
-    elif call.data == "buy_mail":
-        stock = get_stock('mail')
-        if stock == 0:
-            bot.send_message(call.message.chat.id, "❌ Outlook Mail မရှိပါ")
-            return
-        bot.send_message(call.message.chat.id, f"📧 Outlook Mail ($0.10)\nStock: {stock}\n\nအရေအတွက် ရိုက်ထည့်ပါ:")
-        bot.register_next_step_handler(call.message, purchase, 'mail', 0.10)
-    
-    elif call.data == "deposit":
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("$1", callback_data="dep_1"),
-            types.InlineKeyboardButton("$5", callback_data="dep_5"),
-            types.InlineKeyboardButton("$10", callback_data="dep_10"),
-            types.InlineKeyboardButton("✏️ Custom", callback_data="dep_custom")
+    if data in ["show_home", "back_home"]:
+        stock_qty = get_stock_count()
+        welcome_text = (
+            f"🛒 **Welcome to X (Twitter) Vault Store**\n\n"
+            f"📦 **Item:** X (Twitter) New Account (Fresh)\n"
+            f"💰 **Price:** `${PRICE_USDT} USDT` (per acc)\n"
+            f"📊 **Available Stock:** `{stock_qty}` Accounts\n\n"
+            f"👇 Click the button below to buy"
+            if lang == "en" else
+            f"🛒 **X (Twitter) Vault Store မှ ကြိုဆိုပါသည်**\n\n"
+            f"📦 **အကောင့်အမျိုးအစား:** New X Account (Fresh)\n"
+            f"💰 **၁ ကောင့် ဈေးနှုန်း:** `${PRICE_USDT} USDT`\n"
+            f"📊 **ရနိုင်သော Stock:** `{stock_qty}` ကောင့်\n\n"
+            f"👇 ဝယ်ယူလိုပါက အောက်ပါခလုတ်ကို နှိပ်ပါ"
         )
-        bot.edit_message_text("💳 Deposit\n\nပမာဏ ရွေးပါ:", call.message.chat.id, call.message.message_id, reply_markup=markup)
-    
-    elif call.data == "dep_custom":
-        bot.send_message(call.message.chat.id, "💳 ပမာဏ ရိုက်ထည့်ပါ (အနည်းဆုံး $0.5):")
-        bot.register_next_step_handler(call.message, custom_deposit)
-    
-    elif call.data.startswith("dep_"):
-        amount = float(call.data.replace("dep_", ""))
-        deposit_invoice(call.message, amount)
-    
-    elif call.data == "history":
-        records = get_history(user_id)
-        if not records:
-            bot.send_message(call.message.chat.id, "📜 မှတ်တမ်း မရှိပါ")
+        keyboard = [
+            [InlineKeyboardButton("🛒 Buy X Accounts" if lang == "en" else "🛒 X Account ဝယ်ယူမည်", callback_data="buy_x_acc")],
+            [InlineKeyboardButton("💬 Contact Admin", url=f"https://t.me/{ADMIN_USERNAME}")]
+        ]
+        await query.edit_message_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data in ["buy_x_acc", "back_pay_select"]:
+        stock_qty = get_stock_count()
+        if stock_qty == 0:
+            msg = "⚠️ Stock is currently empty." if lang == "en" else "⚠️ **လက်ရှိ Stock ကုန်နေပါသည်**"
+            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_home")]]
+            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            return
+
+        keyboard = [
+            [InlineKeyboardButton("2 accs", callback_data="qty_2"), InlineKeyboardButton("3 accs", callback_data="qty_3")],
+            [InlineKeyboardButton("5 accs", callback_data="qty_5"), InlineKeyboardButton("10 accs", callback_data="qty_10")],
+            [InlineKeyboardButton("🔙 Back", callback_data="back_home")]
+        ]
+        select_msg = (
+            f"🔢 Select quantity of accounts to buy (Available: `{stock_qty}`):"
+            if lang == "en" else
+            f"🔢 ဝယ်ယူလိုသော **အကောင့် အရေအတွက်** ကို ရွေးချယ်ပါ (ရရှိနိုင်သမျှ: `{stock_qty}`):"
+        )
+        await query.edit_message_text(select_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data.startswith("qty_"):
+        qty = int(data.split("_")[1])
+        stock_qty = get_stock_count()
+        if qty > stock_qty:
+            msg = f"⚠️ Only {stock_qty} accs left." if lang == "en" else f"⚠️ Stock တွင် {stock_qty} ကောင့်သာ ကျန်ပါတော့သည်။"
+            await query.answer(msg, show_alert=True)
+            return
+        
+        context.user_data['selected_qty'] = qty
+        total_price = round(qty * PRICE_USDT, 2)
+        
+        # Automatic Crypto Instant Invoice
+        invoice_url = create_nowpayments_invoice(total_price, f"{query.from_user.id}_{qty}", f"{qty} X Accounts")
+        
+        if invoice_url:
+            keyboard = [
+                [InlineKeyboardButton("💳 Pay via NOWPayments (Crypto)", url=invoice_url)],
+                [InlineKeyboardButton("🔙 Back", callback_data="buy_x_acc")]
+            ]
+            msg = (
+                f"💳 **Crypto Instant Payment**\n\nQty: `{qty}` accs\nTotal Amount: `${total_price} USDT`\n\nClick the payment button below to complete purchase."
+                if lang == "en" else
+                f"💳 **Crypto အလိုအလျောက် ငွေပေးချေရန်**\n\nအရေအတွက်: `{qty}` ကောင့်\nကျသင့်ငွေ: `${total_price} USDT`\n\nအောက်ပါ ခလုတ်ကို နှိပ်၍ ငွေလွှဲပေးချေနိုင်ပါသည်။"
+            )
         else:
-            msg = "📜 Last 5 Purchases:\n\n"
-            for r in records:
-                msg += f"🔹 [{r[2]}] ({r[0].upper()}): `{r[1]}`\n"
-            bot.send_message(call.message.chat.id, msg, parse_mode="Markdown")
-    
-    elif call.data == "balance":
-        balance = get_balance(user_id)
-        bot.send_message(call.message.chat.id, f"💰 Balance: ${balance:.2f}", parse_mode="Markdown")
-    
-    elif call.data == "admin":
-        if not is_admin(user_id):
-            bot.answer_callback_query(call.id, "⛔️ Admin မဟုတ်ပါ")
-            return
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("➕ Add X", callback_data="a_addx"),
-            types.InlineKeyboardButton("➕ Add Mail", callback_data="a_addmail"),
-            types.InlineKeyboardButton("🗑️ Clear X", callback_data="a_clearx"),
-            types.InlineKeyboardButton("🗑️ Clear Mail", callback_data="a_clearmail"),
-            types.InlineKeyboardButton("📊 Stock", callback_data="a_stock"),
-            types.InlineKeyboardButton("📢 Broadcast", callback_data="a_bc"),
-            types.InlineKeyboardButton("💾 Backup", callback_data="a_backup")
-        )
-        bot.edit_message_text("🔐 Admin Panel", call.message.chat.id, call.message.message_id, reply_markup=markup)
-    
-    elif call.data == "a_addx":
-        bot.send_message(call.message.chat.id, "✏️ `/addx user|pass`", parse_mode="Markdown")
-    elif call.data == "a_addmail":
-        bot.send_message(call.message.chat.id, "✏️ `/addmail mail|pass`", parse_mode="Markdown")
-    elif call.data == "a_clearx":
-        clear_stock('x')
-        bot.send_message(call.message.chat.id, "✅ X Stock ဖျက်ပြီး")
-    elif call.data == "a_clearmail":
-        clear_stock('mail')
-        bot.send_message(call.message.chat.id, "✅ Mail Stock ဖျက်ပြီး")
-    elif call.data == "a_stock":
-        bot.send_message(call.message.chat.id, f"📊 Stock\n\nX: {get_stock('x')}\nMail: {get_stock('mail')}", parse_mode="Markdown")
-    elif call.data == "a_bc":
-        bot.send_message(call.message.chat.id, "📢 `/bc message`", parse_mode="Markdown")
-    elif call.data == "a_backup":
-        try:
-            with open("bot_vault.db", "rb") as f:
-                bot.send_document(call.message.chat.id, f, caption="📦 Backup")
-        except:
-            bot.send_message(call.message.chat.id, "❌ Backup မရပါ")
+            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="buy_x_acc")]]
+            msg = "⚠️ Payment Gateway connection error. Please contact Admin."
 
-# ---------------------------------------------------------
-# PURCHASE
-# ---------------------------------------------------------
-def purchase(message, category, price):
-    try:
-        qty = int(message.text.strip())
-        if qty <= 0:
-            bot.send_message(message.chat.id, "❌ 1 ခုအနည်းဆုံး")
-            return
-        
-        user_id = message.from_user.id
-        total = round(qty * price, 2)
-        balance = get_balance(user_id)
-        
-        if balance < total:
-            bot.send_message(message.chat.id, f"❌ Balance မလုံလောက်\n💰 သင့်မှာ: ${balance:.2f}\n💰 လိုအပ်: ${total:.2f}")
-            return
-        
-        conn = sqlite3.connect("bot_vault.db")
-        c = conn.cursor()
-        c.execute("SELECT id, account_data FROM stock WHERE category=? LIMIT ?", (category, qty))
-        items = c.fetchall()
-        
-        if len(items) < qty:
-            bot.send_message(message.chat.id, "❌ Stock မလုံလောက်")
-            conn.close()
-            return
-        
-        c.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (total, user_id))
-        date_now = time.strftime("%Y-%m-%d %H:%M:%S")
-        delivered = []
-        
-        for item_id, data in items:
-            delivered.append(data)
-            c.execute("DELETE FROM stock WHERE id=?", (item_id,))
-            c.execute("INSERT INTO history (user_id, category, account_data, amount, date) VALUES (?, ?, ?, ?, ?)",
-                     (user_id, category, data, price, date_now))
-        
-        conn.commit()
-        conn.close()
-        
-        bot.send_message(
-            message.chat.id,
-            f"✅ Purchase Successful!\n\n📦 {category.upper()} x{qty}\n💰 ${total:.2f}\n\n" + "\n".join([f"`{d}`" for d in delivered]),
-            parse_mode="Markdown"
-        )
-    except:
-        bot.send_message(message.chat.id, "❌ ဂဏန်း ရိုက်ထည့်ပါ")
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-# ---------------------------------------------------------
-# DEPOSIT
-# ---------------------------------------------------------
-def custom_deposit(message):
-    try:
-        amount = float(message.text.strip())
-        if amount < 0.5:
-            bot.send_message(message.chat.id, "❌ အနည်းဆုံး $0.5")
-            return
-        deposit_invoice(message, amount)
-    except:
-        bot.send_message(message.chat.id, "❌ ဂဏန်း ရိုက်ထည့်ပါ")
-
-def deposit_invoice(message, amount):
-    user_id = message.from_user.id
-    order_id = f"DEP-{int(time.time())}-{user_id}"
-    
-    msg = bot.send_message(message.chat.id, "⏳ Generating invoice...")
-    invoice = create_invoice(amount, order_id)
-    
-    if invoice and "invoice_url" in invoice:
-        save_order(str(invoice["id"]), user_id, amount)
-        bot.edit_message_text(
-            f"💳 Deposit Invoice\n\n💰 ${amount:.2f}\n\n🔗 [Pay Now]({invoice['invoice_url']})",
-            message.chat.id,
-            msg.message_id,
-            parse_mode="Markdown",
-            disable_web_page_preview=True
-        )
-    else:
-        bot.edit_message_text("❌ Invoice မရပါ", message.chat.id, msg.message_id)
-
-# ---------------------------------------------------------
-# ADMIN COMMANDS
-# ---------------------------------------------------------
-@bot.message_handler(commands=['addx'])
-def addx(message):
-    if not is_admin(message.from_user.id):
-        return
-    accounts = message.text.replace("/addx", "").strip().split("\n")
-    valid = [a.strip() for a in accounts if a.strip()]
-    if not valid:
-        bot.send_message(message.chat.id, "⚠️ `/addx user|pass`", parse_mode="Markdown")
-        return
-    for acc in valid:
-        add_stock('x', acc)
-    bot.send_message(message.chat.id, f"✅ X {len(valid)} ခုထည့်ပြီး")
-
-@bot.message_handler(commands=['addmail'])
-def addmail(message):
-    if not is_admin(message.from_user.id):
-        return
-    accounts = message.text.replace("/addmail", "").strip().split("\n")
-    valid = [a.strip() for a in accounts if a.strip()]
-    if not valid:
-        bot.send_message(message.chat.id, "⚠️ `/addmail mail|pass`", parse_mode="Markdown")
-        return
-    for acc in valid:
-        add_stock('mail', acc)
-    bot.send_message(message.chat.id, f"✅ Mail {len(valid)} ခုထည့်ပြီး")
-
-@bot.message_handler(commands=['bc'])
-def broadcast(message):
-    if not is_admin(message.from_user.id):
-        return
-    text = message.text.replace("/bc", "").strip()
+# --- Admin Commands ---
+async def add_accounts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID: return
+    text = update.message.text.replace("/addacc", "").strip()
     if not text:
-        bot.send_message(message.chat.id, "⚠️ `/bc message`", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ ပုံစံ: `/addacc user|pass|link`", parse_mode="Markdown")
         return
-    
-    conn = sqlite3.connect("bot_vault.db")
-    c = conn.cursor()
-    c.execute("SELECT user_id FROM users")
-    users = c.fetchall()
+    accs = [line.strip() for line in text.split("\n") if line.strip()]
+    added_count = add_accounts_to_db(accs)
+    await update.message.reply_text(f"✅ Stock အသစ် `{added_count}` ကောင့် ထည့်ပြီးပါပြီ။\nလက်ရှိ Stock: `{get_stock_count()}` ကောင့်", parse_mode="Markdown")
+
+async def delete_acc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID: return
+    if not context.args:
+        await update.message.reply_text("⚠️ ပုံစံ: `/delacc @username`", parse_mode="Markdown")
+        return
+    username = context.args[0].strip().lstrip("@")
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM accounts WHERE account_info LIKE ? AND status = 'available'", (f"%{username}%",))
+    deleted_rows = cursor.rowcount
+    conn.commit()
     conn.close()
     
-    success = 0
-    for u in users:
-        try:
-            bot.send_message(u[0], f"📢 Announcement\n\n{text}")
-            success += 1
-            time.sleep(0.05)
-        except:
-            pass
-    bot.send_message(message.chat.id, f"✅ {success} users ပို့ပြီး")
+    if deleted_rows > 0:
+        await update.message.reply_text(f"🗑️ `{username}` ({deleted_rows}) ခုကို ဖယ်ရှားပြီးပါပြီ။\nStock: `{get_stock_count()}`", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ `{username}` ကို Stock ထဲတွင် မတွေ့ပါ၊", parse_mode="Markdown")
 
-# ---------------------------------------------------------
-# WEBHOOK
-# ---------------------------------------------------------
-@app.route('/webhook', methods=['POST'])
-def webhook():
+async def check_stock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID: return
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT account_info FROM accounts WHERE status = 'available'")
+    rows = cursor.fetchall()
+    conn.close()
+    if not rows:
+        await update.message.reply_text("📦 Stock ထဲတွင် အကောင့်မရှိပါ။")
+        return
+    
+    chunk_size = 50
+    for i in range(0, len(rows), chunk_size):
+        chunk = rows[i:i + chunk_size]
+        accs_str = "\n".join([f"{i+j+1}. `{r[0]}`" for j, r in enumerate(chunk)])
+        await update.message.reply_text(f"📦 **လက်ရှိ Stock စာရင်း ({i+1} မှ {i+len(chunk)}):**\n\n{accs_str}", parse_mode="Markdown")
+
+async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID: return
+    limit = int(context.args[0]) if context.args and context.args[0].isdigit() else 20
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT account_info, buyer_id, sold_at FROM accounts WHERE status = 'sold' ORDER BY id DESC LIMIT ?", (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        await update.message.reply_text("📜 ရောင်းရသည့် မှတ်တမ်း မရှိသေးပါ။")
+        return
+    
+    history_msg = f"📜 **နောက်ဆုံး ရောင်းရသည့် အကောင့် ({len(rows)}) ခု:**\n\n"
+    for r in rows:
+        history_msg += f"👤 Buyer ID: `{r[1]}`\n📦 Acc: `{r[0]}`\n⏰ Time: `{r[2]}`\n-------------------\n"
+    
+    await update.message.reply_text(history_msg[:4000], parse_mode="Markdown")
+
+async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID: return
+    await update.message.reply_text("🔄 Database ကို Backup ယူနေပါသည်...")
     try:
-        data = request.json
-        if data and data.get('payment_status') in ['finished', 'confirmed']:
-            payment_id = str(data.get('payment_id'))
-            order = get_order(payment_id)
-            if order and order[2] == 'waiting':
-                user_id, amount, _ = order
-                update_balance(user_id, amount)
-                update_order(payment_id, 'finished')
-                try:
-                    bot.send_message(user_id, f"✅ Deposit Confirmed!\n\n💰 ${amount:.2f} ထည့်သွင်းပြီး")
-                except:
-                    pass
-        return "OK", 200
-    except:
-        return "Error", 500
+        backup_file = backup_db()
+        await update.message.reply_document(document=open(backup_file, 'rb'), caption=f"✅ Backup ပြီးပါပြီ: `{os.path.basename(backup_file)}`", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Backup Error: `{e}`", parse_mode="Markdown")
 
-@app.route('/')
-def index():
-    return "Bot is running!", 200
+async def ban_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID: return
+    if context.args:
+        ban_user(context.args[0])
+        await update.message.reply_text(f"🚫 User ID `{context.args[0]}` ကို Ban လိုက်ပါပြီ။", parse_mode="Markdown")
 
-# ---------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------
+async def unban_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID: return
+    if context.args:
+        unban_user(context.args[0])
+        await update.message.reply_text(f"✅ User ID `{context.args[0]}` ကို Unban လိုက်ပါပြီ။", parse_mode="Markdown")
+
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("addacc", add_accounts_cmd))
+    application.add_handler(CommandHandler("delacc", delete_acc_cmd))
+    application.add_handler(CommandHandler("stock", check_stock_cmd))
+    application.add_handler(CommandHandler("history", history_cmd))
+    application.add_handler(CommandHandler("backup", backup_cmd))
+    application.add_handler(CommandHandler("ban", ban_user_cmd))
+    application.add_handler(CommandHandler("unban", unban_user_cmd))
+    
+    application.add_handler(CallbackQueryHandler(button_handler))
+
+    application.run_polling()
+
 if __name__ == "__main__":
-    def run_flask():
-        port = int(os.environ.get("PORT", 5000))
-        app.run(host="0.0.0.0", port=port)
-    
-    t = threading.Thread(target=run_flask, daemon=True)
-    t.start()
-    
-    print("Bot starting...")
-    bot.remove_webhook()
-    bot.polling(none_stop=True, interval=1)
+    main()
