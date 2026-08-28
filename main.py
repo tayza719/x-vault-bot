@@ -1,3 +1,4 @@
+# main.py
 import os
 import logging
 import sqlite3
@@ -75,7 +76,8 @@ def add_accounts_to_db(category, acc_list):
     added = 0
     for acc in acc_list:
         try:
-            cursor.execute("INSERT INTO accounts (category, account_info, status) VALUES (?, ?, 'available')", (category, acc))
+            # INSERT OR REPLACE ပြောင်းလဲထားသဖြင့် ရောင်းပြီးသား/စမ်းထားသည့် အကောင့်များ ပြန်ထည့်ပါက တန်းဝင်မည်ဖြစ်ပါသည်
+            cursor.execute("INSERT OR REPLACE INTO accounts (category, account_info, status) VALUES (?, ?, 'available')", (category, acc))
             added += 1
         except sqlite3.IntegrityError:
             pass
@@ -120,7 +122,7 @@ def get_crypto_amount(usd_amount: float, coin: str) -> float:
         logging.error(f"Price Error: {e}")
         return None
 
-# --- BLOCKCHAIN RPC/EXPLORER BALANCE CHECKER (NO API KEY REQUIRED) ---
+# --- BLOCKCHAIN RPC/EXPLORER BALANCE CHECKER ---
 def check_blockchain_balance(address: str, coin: str) -> float:
     try:
         if coin == "sol":
@@ -380,7 +382,7 @@ def handle_query(call):
                 bot.send_message(user_id, success_msg, parse_mode="Markdown")
                 bot.answer_callback_query(call.id, "Success!", show_alert=False)
                 
-                # Admin ထံ Noti ပို့ခြင်း
+                # Admin Noti
                 admin_noti = f"🔔 **[NEW PURCHASE ALERT]**\n\n" \
                              f"👤 **Buyer User ID:** `{user_id}`\n" \
                              f"🆔 **Order ID:** `#{order_id}`\n" \
