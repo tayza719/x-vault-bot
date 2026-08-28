@@ -5,9 +5,9 @@ import datetime
 import shutil
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
 
-# --- Config Setup (From Heroku Environment Variables) ---
+# --- Config Setup ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7613605178"))
 NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY")
@@ -88,37 +88,20 @@ def add_accounts_to_db(acc_list):
     conn.close()
     return added
 
-def pop_accounts_from_db(qty, buyer_id):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, account_info FROM accounts WHERE status = 'available' LIMIT ?", (qty,))
-    rows = cursor.fetchall()
-    if len(rows) < qty:
-        conn.close()
-        return None
-    delivered = []
-    mm_now = datetime.datetime.utcnow() + datetime.timedelta(hours=6, minutes=30)
-    now_str = mm_now.strftime("%Y-%m-%d %H:%M:%S")
-    for row in rows:
-        acc_id, acc_info = row[0], row[1]
-        delivered.append(acc_info)
-        cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = ?, sold_at = ? WHERE id = ?", (buyer_id, now_str, acc_id))
-    conn.commit()
-    conn.close()
-    return delivered
-
-async def check_banned(update: Update) -> bool:
+def check_banned(update: Update) -> bool:
     user = update.effective_user
     if user and str(user.id) in get_banned_users():
         if update.message:
-            await update.message.reply_text("🚫 အကောင့်ကို ဘော့တ်အသုံးပြုခွင့် ပိတ်ပင် (Ban) ထားပါသည်။", parse_mode="Markdown")
+            update.message.reply_text("🚫 အကောင့်ကို ဘော့တ်အသုံးပြုခွင့် ပိတ်ပင် (Ban) ထားပါသည်။", parse_mode="Markdown")
         elif update.callback_query:
-            await update.callback_query.answer("Banned User.", show_alert=True)
+            update.callback_query.answer("Banned User.", show_alert=True)
         return True
     return False
 
 # --- NOWPayments API Helper ---
 def create_nowpayments_invoice(amount, order_id, description):
+    if not NOWPAYMENTS_API_KEY:
+        return None
     url = "https://api.nowpayments.io/v1/invoice"
     headers = {
         "x-api-key": NOWPAYMENTS_API_KEY,
@@ -133,24 +116,24 @@ def create_nowpayments_invoice(amount, order_id, description):
     }
     try:
         res = requests.post(url, json=payload, headers=headers)
-        if res.status_code == 200 or res.status_code == 201:
+        if res.status_code in [200, 201]:
             return res.json().get("invoice_url")
     except Exception as e:
         logging.error(f"NOWPayments Error: {e}")
     return None
 
 # --- User UI Handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await check_banned(update): return
+def start(update: Update, context: CallbackContext):
+    if check_banned(update): return
     keyboard = [
         [InlineKeyboardButton("🇲🇲 မြန်မာစာ", callback_data="lang_mm"), InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")]
     ]
-    await update.message.reply_text("🌐 **ကျေးဇူးပြု၍ ဘာသာစကား ရွေးချယ်ပါ**\n **Please select your language**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    update.message.reply_text("🌐 **ကျေးဇူးပြု၍ ဘာသာစကား ရွေးချယ်ပါ**\n **Please select your language**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await check_banned(update): return
+def button_handler(update: Update, context: CallbackContext):
+    if check_banned(update): return
     query = update.callback_query
-    await query.answer()
+    query.answer()
     data = query.data
 
     if data.startswith("lang_"):
@@ -178,14 +161,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🛒 Buy X Accounts" if lang == "en" else "🛒 X Account ဝယ်ယူမည်", callback_data="buy_x_acc")],
             [InlineKeyboardButton("💬 Contact Admin", url=f"https://t.me/{ADMIN_USERNAME}")]
         ]
-        await query.edit_message_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        query.edit_message_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
     elif data in ["buy_x_acc", "back_pay_select"]:
         stock_qty = get_stock_count()
         if stock_qty == 0:
             msg = "⚠️ Stock is currently empty." if lang == "en" else "⚠️ **လက်ရှိ Stock ကုန်နေပါသည်**"
             keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_home")]]
-            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
             return
 
         keyboard = [
@@ -198,20 +181,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if lang == "en" else
             f"🔢 ဝယ်ယူလိုသော **အကောင့် အရေအတွက်** ကို ရွေးချယ်ပါ (ရရှိနိုင်သမျှ: `{stock_qty}`):"
         )
-        await query.edit_message_text(select_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        query.edit_message_text(select_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
     elif data.startswith("qty_"):
         qty = int(data.split("_")[1])
         stock_qty = get_stock_count()
         if qty > stock_qty:
             msg = f"⚠️ Only {stock_qty} accs left." if lang == "en" else f"⚠️ Stock တွင် {stock_qty} ကောင့်သာ ကျန်ပါတော့သည်။"
-            await query.answer(msg, show_alert=True)
+            query.answer(msg, show_alert=True)
             return
         
-        context.user_data['selected_qty'] = qty
         total_price = round(qty * PRICE_USDT, 2)
-        
-        # Automatic Crypto Instant Invoice
         invoice_url = create_nowpayments_invoice(total_price, f"{query.from_user.id}_{qty}", f"{qty} X Accounts")
         
         if invoice_url:
@@ -228,23 +208,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="buy_x_acc")]]
             msg = "⚠️ Payment Gateway connection error. Please contact Admin."
 
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 # --- Admin Commands ---
-async def add_accounts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def add_accounts_cmd(update: Update, context: CallbackContext):
     if update.message.from_user.id != ADMIN_ID: return
     text = update.message.text.replace("/addacc", "").strip()
     if not text:
-        await update.message.reply_text("⚠️ ပုံစံ: `/addacc user|pass|link`", parse_mode="Markdown")
+        update.message.reply_text("⚠️ ပုံစံ: `/addacc user|pass|link`", parse_mode="Markdown")
         return
     accs = [line.strip() for line in text.split("\n") if line.strip()]
     added_count = add_accounts_to_db(accs)
-    await update.message.reply_text(f"✅ Stock အသစ် `{added_count}` ကောင့် ထည့်ပြီးပါပြီ။\nလက်ရှိ Stock: `{get_stock_count()}` ကောင့်", parse_mode="Markdown")
+    update.message.reply_text(f"✅ Stock အသစ် `{added_count}` ကောင့် ထည့်ပြီးပါပြီ။\nလက်ရှိ Stock: `{get_stock_count()}` ကောင့်", parse_mode="Markdown")
 
-async def delete_acc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def delete_acc_cmd(update: Update, context: CallbackContext):
     if update.message.from_user.id != ADMIN_ID: return
     if not context.args:
-        await update.message.reply_text("⚠️ ပုံစံ: `/delacc @username`", parse_mode="Markdown")
+        update.message.reply_text("⚠️ ပုံစံ: `/delacc @username`", parse_mode="Markdown")
         return
     username = context.args[0].strip().lstrip("@")
     conn = sqlite3.connect(DB_FILE)
@@ -255,11 +235,11 @@ async def delete_acc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     
     if deleted_rows > 0:
-        await update.message.reply_text(f"🗑️ `{username}` ({deleted_rows}) ခုကို ဖယ်ရှားပြီးပါပြီ။\nStock: `{get_stock_count()}`", parse_mode="Markdown")
+        update.message.reply_text(f"🗑️ `{username}` ({deleted_rows}) ခုကို ဖယ်ရှားပြီးပါပြီ။\nStock: `{get_stock_count()}`", parse_mode="Markdown")
     else:
-        await update.message.reply_text(f"❌ `{username}` ကို Stock ထဲတွင် မတွေ့ပါ၊", parse_mode="Markdown")
+        update.message.reply_text(f"❌ `{username}` ကို Stock ထဲတွင် မတွေ့ပါ၊", parse_mode="Markdown")
 
-async def check_stock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def check_stock_cmd(update: Update, context: CallbackContext):
     if update.message.from_user.id != ADMIN_ID: return
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -267,16 +247,16 @@ async def check_stock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = cursor.fetchall()
     conn.close()
     if not rows:
-        await update.message.reply_text("📦 Stock ထဲတွင် အကောင့်မရှိပါ။")
+        update.message.reply_text("📦 Stock ထဲတွင် အကောင့်မရှိပါ။")
         return
     
     chunk_size = 50
     for i in range(0, len(rows), chunk_size):
         chunk = rows[i:i + chunk_size]
         accs_str = "\n".join([f"{i+j+1}. `{r[0]}`" for j, r in enumerate(chunk)])
-        await update.message.reply_text(f"📦 **လက်ရှိ Stock စာရင်း ({i+1} မှ {i+len(chunk)}):**\n\n{accs_str}", parse_mode="Markdown")
+        update.message.reply_text(f"📦 **လက်ရှိ Stock စာရင်း ({i+1} မှ {i+len(chunk)}):**\n\n{accs_str}", parse_mode="Markdown")
 
-async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def history_cmd(update: Update, context: CallbackContext):
     if update.message.from_user.id != ADMIN_ID: return
     limit = int(context.args[0]) if context.args and context.args[0].isdigit() else 20
     conn = sqlite3.connect(DB_FILE)
@@ -286,51 +266,57 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     
     if not rows:
-        await update.message.reply_text("📜 ရောင်းရသည့် မှတ်တမ်း မရှိသေးပါ။")
+        update.message.reply_text("📜 ရောင်းရသည့် မှတ်တမ်း မရှိသေးပါ။")
         return
     
     history_msg = f"📜 **နောက်ဆုံး ရောင်းရသည့် အကောင့် ({len(rows)}) ခု:**\n\n"
     for r in rows:
         history_msg += f"👤 Buyer ID: `{r[1]}`\n📦 Acc: `{r[0]}`\n⏰ Time: `{r[2]}`\n-------------------\n"
     
-    await update.message.reply_text(history_msg[:4000], parse_mode="Markdown")
+    update.message.reply_text(history_msg[:4000], parse_mode="Markdown")
 
-async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def backup_cmd(update: Update, context: CallbackContext):
     if update.message.from_user.id != ADMIN_ID: return
-    await update.message.reply_text("🔄 Database ကို Backup ယူနေပါသည်...")
+    update.message.reply_text("🔄 Database ကို Backup ယူနေပါသည်...")
     try:
         backup_file = backup_db()
-        await update.message.reply_document(document=open(backup_file, 'rb'), caption=f"✅ Backup ပြီးပါပြီ: `{os.path.basename(backup_file)}`", parse_mode="Markdown")
+        update.message.reply_document(document=open(backup_file, 'rb'), caption=f"✅ Backup ပြီးပါပြီ: `{os.path.basename(backup_file)}`", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"❌ Backup Error: `{e}`", parse_mode="Markdown")
+        update.message.reply_text(f"❌ Backup Error: `{e}`", parse_mode="Markdown")
 
-async def ban_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def ban_user_cmd(update: Update, context: CallbackContext):
     if update.message.from_user.id != ADMIN_ID: return
     if context.args:
         ban_user(context.args[0])
-        await update.message.reply_text(f"🚫 User ID `{context.args[0]}` ကို Ban လိုက်ပါပြီ။", parse_mode="Markdown")
+        update.message.reply_text(f"🚫 User ID `{context.args[0]}` ကို Ban လိုက်ပါပြီ။", parse_mode="Markdown")
 
-async def unban_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def unban_user_cmd(update: Update, context: CallbackContext):
     if update.message.from_user.id != ADMIN_ID: return
     if context.args:
         unban_user(context.args[0])
-        await update.message.reply_text(f"✅ User ID `{context.args[0]}` ကို Unban လိုက်ပါပြီ။", parse_mode="Markdown")
+        update.message.reply_text(f"✅ User ID `{context.args[0]}` ကို Unban လိုက်ပါပြီ။", parse_mode="Markdown")
 
 def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("addacc", add_accounts_cmd))
-    application.add_handler(CommandHandler("delacc", delete_acc_cmd))
-    application.add_handler(CommandHandler("stock", check_stock_cmd))
-    application.add_handler(CommandHandler("history", history_cmd))
-    application.add_handler(CommandHandler("backup", backup_cmd))
-    application.add_handler(CommandHandler("ban", ban_user_cmd))
-    application.add_handler(CommandHandler("unban", unban_user_cmd))
-    
-    application.add_handler(CallbackQueryHandler(button_handler))
+    if not BOT_TOKEN:
+        logging.error("BOT_TOKEN is not set in Heroku Config Vars!")
+        return
 
-    application.run_polling()
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("addacc", add_accounts_cmd))
+    dp.add_handler(CommandHandler("delacc", delete_acc_cmd))
+    dp.add_handler(CommandHandler("stock", check_stock_cmd))
+    dp.add_handler(CommandHandler("history", history_cmd))
+    dp.add_handler(CommandHandler("backup", backup_cmd))
+    dp.add_handler(CommandHandler("ban", ban_user_cmd))
+    dp.add_handler(CommandHandler("unban", unban_user_cmd))
+    
+    dp.add_handler(CallbackQueryHandler(button_handler))
+
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
