@@ -7,10 +7,11 @@ import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# --- Config Setup ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "7613605178"))
-NOWPAYMENTS_API_KEY = os.getenv("NOWPAYMENTS_API_KEY")
+# --- Configuration (Hardcoded Settings) ---
+BOT_TOKEN = "8683965691:AAEthMpBt_RJNY1NPNDPtH-hSnTcpWFU0L8"
+ADMIN_ID = 7613605178
+NOWPAYMENTS_API_KEY = "KGG6CA4-KRDM70D-M9WVWG7-XRVTCPJ"
+HEROKU_APP_NAME = "x-vault-bot-20----26"
 
 ADMIN_USERNAME = "EchoWhisper"
 DB_FILE = "store.db"
@@ -20,7 +21,7 @@ PRICE_USDT = 0.15
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# --- Database Setup & Helpers ---
+# --- Database Setup & Backups ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -46,6 +47,7 @@ def backup_db():
 
 init_db()
 
+# --- Helper Functions ---
 def get_banned_users():
     if not os.path.exists(BANNED_FILE):
         return set()
@@ -100,8 +102,6 @@ async def check_banned(update: Update) -> bool:
 
 # --- NOWPayments API Helper ---
 def create_nowpayments_invoice(amount, order_id, description):
-    if not NOWPAYMENTS_API_KEY:
-        return None
     url = "https://api.nowpayments.io/v1/invoice"
     headers = {
         "x-api-key": NOWPAYMENTS_API_KEY,
@@ -122,7 +122,7 @@ def create_nowpayments_invoice(amount, order_id, description):
         logging.error(f"NOWPayments Error: {e}")
     return None
 
-# --- User UI Handlers ---
+# --- User Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await check_banned(update): return
     keyboard = [
@@ -233,7 +233,6 @@ async def delete_acc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     deleted_rows = cursor.rowcount
     conn.commit()
     conn.close()
-    
     if deleted_rows > 0:
         await update.message.reply_text(f"🗑️ `{username}` ({deleted_rows}) ခုကို ဖယ်ရှားပြီးပါပြီ။\nStock: `{get_stock_count()}`", parse_mode="Markdown")
     else:
@@ -249,7 +248,6 @@ async def check_stock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not rows:
         await update.message.reply_text("📦 Stock ထဲတွင် အကောင့်မရှိပါ။")
         return
-    
     chunk_size = 50
     for i in range(0, len(rows), chunk_size):
         chunk = rows[i:i + chunk_size]
@@ -264,15 +262,12 @@ async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("SELECT account_info, buyer_id, sold_at FROM accounts WHERE status = 'sold' ORDER BY id DESC LIMIT ?", (limit,))
     rows = cursor.fetchall()
     conn.close()
-    
     if not rows:
         await update.message.reply_text("📜 ရောင်းရသည့် မှတ်တမ်း မရှိသေးပါ။")
         return
-    
     history_msg = f"📜 **နောက်ဆုံး ရောင်းရသည့် အကောင့် ({len(rows)}) ခု:**\n\n"
     for r in rows:
         history_msg += f"👤 Buyer ID: `{r[1]}`\n📦 Acc: `{r[0]}`\n⏰ Time: `{r[2]}`\n-------------------\n"
-    
     await update.message.reply_text(history_msg[:4000], parse_mode="Markdown")
 
 async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -296,11 +291,8 @@ async def unban_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         unban_user(context.args[0])
         await update.message.reply_text(f"✅ User ID `{context.args[0]}` ကို Unban လိုက်ပါပြီ။", parse_mode="Markdown")
 
+# --- Main Application ---
 def main():
-    if not BOT_TOKEN:
-        logging.error("BOT_TOKEN is not set in Heroku Config Vars!")
-        return
-
     application = Application.builder().token(BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
@@ -314,7 +306,6 @@ def main():
     
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    # This handles the async loop properly
     application.run_polling()
 
 if __name__ == "__main__":
