@@ -4,14 +4,12 @@ import sqlite3
 import datetime
 import shutil
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+import telebot
+from telebot import types
 
-# --- Configuration (Hardcoded Settings) ---
 BOT_TOKEN = "8683965691:AAEthMpBt_RJNY1NPNDPtH-hSnTcpWFU0L8"
 ADMIN_ID = 7613605178
 NOWPAYMENTS_API_KEY = "KGG6CA4-KRDM70D-M9WVWG7-XRVTCPJ"
-HEROKU_APP_NAME = "x-vault-bot-20----26"
 
 ADMIN_USERNAME = "EchoWhisper"
 DB_FILE = "store.db"
@@ -20,8 +18,8 @@ BACKUP_DIR = "backups"
 PRICE_USDT = 0.15
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- Database Setup & Backups ---
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -37,17 +35,8 @@ def init_db():
     conn.commit()
     conn.close()
 
-def backup_db():
-    if not os.path.exists(BACKUP_DIR):
-        os.makedirs(BACKUP_DIR)
-    mm_now = datetime.datetime.utcnow() + datetime.timedelta(hours=6, minutes=30)
-    backup_filename = f"{BACKUP_DIR}/store_backup_{mm_now.strftime('%Y%m%d_%H%M%S')}.db"
-    shutil.copy2(DB_FILE, backup_filename)
-    return backup_filename
-
 init_db()
 
-# --- Helper Functions ---
 def get_banned_users():
     if not os.path.exists(BANNED_FILE):
         return set()
@@ -90,17 +79,6 @@ def add_accounts_to_db(acc_list):
     conn.close()
     return added
 
-async def check_banned(update: Update) -> bool:
-    user = update.effective_user
-    if user and str(user.id) in get_banned_users():
-        if update.message:
-            await update.message.reply_text("🚫 အကောင့်ကို ဘော့တ်အသုံးပြုခွင့် ပိတ်ပင် (Ban) ထားပါသည်။", parse_mode="Markdown")
-        elif update.callback_query:
-            await update.callback_query.answer("Banned User.", show_alert=True)
-        return True
-    return False
-
-# --- NOWPayments API Helper ---
 def create_nowpayments_invoice(amount, order_id, description):
     url = "https://api.nowpayments.io/v1/invoice"
     headers = {
@@ -122,191 +100,109 @@ def create_nowpayments_invoice(amount, order_id, description):
         logging.error(f"NOWPayments Error: {e}")
     return None
 
-# --- User Handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await check_banned(update): return
-    keyboard = [
-        [InlineKeyboardButton("🇲🇲 မြန်မာစာ", callback_data="lang_mm"), InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")]
-    ]
-    await update.message.reply_text("🌐 **ကျေးဇူးပြု၍ ဘာသာစကား ရွေးချယ်ပါ**\n **Please select your language**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    if str(message.from_user.id) in get_banned_users():
+        bot.reply_to(message, "🚫 အကောင့်ကို ဘော့တ်အသုံးပြုခွင့် ပိတ်ပင်ထားပါသည်။")
+        return
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("🇲🇲 မြန်မာစာ", callback_data="lang_mm"),
+        types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
+    )
+    bot.send_message(message.chat.id, "🌐 **ကျေးဇူးပြု၍ ဘာသာစကား ရွေးချယ်ပါ**\n **Please select your language**", reply_markup=markup, parse_mode="Markdown")
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await check_banned(update): return
-    query = update.callback_query
-    await query.answer()
-    data = query.data
+@bot.callback_query_handler(func=lambda call: True)
+def handle_query(call):
+    if str(call.from_user.id) in get_banned_users():
+        bot.answer_callback_query(call.id, "Banned User.", show_alert=True)
+        return
+
+    data = call.data
+    lang = "mm"
 
     if data.startswith("lang_"):
-        context.user_data['lang'] = data.split("_")[1]
-        data = "show_home"
-
-    lang = context.user_data.get('lang', 'mm')
-
-    if data in ["show_home", "back_home"]:
+        lang = data.split("_")[1]
         stock_qty = get_stock_count()
         welcome_text = (
-            f"🛒 **Welcome to X (Twitter) Vault Store**\n\n"
-            f"📦 **Item:** X (Twitter) New Account (Fresh)\n"
-            f"💰 **Price:** `${PRICE_USDT} USDT` (per acc)\n"
-            f"📊 **Available Stock:** `{stock_qty}` Accounts\n\n"
-            f"👇 Click the button below to buy"
-            if lang == "en" else
             f"🛒 **X (Twitter) Vault Store မှ ကြိုဆိုပါသည်**\n\n"
             f"📦 **အကောင့်အမျိုးအစား:** New X Account (Fresh)\n"
             f"💰 **၁ ကောင့် ဈေးနှုန်း:** `${PRICE_USDT} USDT`\n"
             f"📊 **ရနိုင်သော Stock:** `{stock_qty}` ကောင့်\n\n"
             f"👇 ဝယ်ယူလိုပါက အောက်ပါခလုတ်ကို နှိပ်ပါ"
+            if lang == "mm" else
+            f"🛒 **Welcome to X (Twitter) Vault Store**\n\n"
+            f"📦 **Item:** X (Twitter) New Account (Fresh)\n"
+            f"💰 **Price:** `${PRICE_USDT} USDT` (per acc)\n"
+            f"📊 **Available Stock:** `{stock_qty}` Accounts\n\n"
+            f"👇 Click the button below to buy"
         )
-        keyboard = [
-            [InlineKeyboardButton("🛒 Buy X Accounts" if lang == "en" else "🛒 X Account ဝယ်ယူမည်", callback_data="buy_x_acc")],
-            [InlineKeyboardButton("💬 Contact Admin", url=f"https://t.me/{ADMIN_USERNAME}")]
-        ]
-        await query.edit_message_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🛒 X Account ဝယ်ယူမည်" if lang == "mm" else "🛒 Buy X Accounts", callback_data="buy_x_acc"))
+        markup.add(types.InlineKeyboardButton("💬 Contact Admin", url=f"https://t.me/{ADMIN_USERNAME}"))
+        bot.edit_message_text(welcome_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    elif data in ["buy_x_acc", "back_pay_select"]:
+    elif data == "buy_x_acc":
         stock_qty = get_stock_count()
         if stock_qty == 0:
-            msg = "⚠️ Stock is currently empty." if lang == "en" else "⚠️ **လက်ရှိ Stock ကုန်နေပါသည်**"
-            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_home")]]
-            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            bot.answer_callback_query(call.id, "Stock ကုန်နေပါသည်", show_alert=True)
             return
-
-        keyboard = [
-            [InlineKeyboardButton("2 accs", callback_data="qty_2"), InlineKeyboardButton("3 accs", callback_data="qty_3")],
-            [InlineKeyboardButton("5 accs", callback_data="qty_5"), InlineKeyboardButton("10 accs", callback_data="qty_10")],
-            [InlineKeyboardButton("🔙 Back", callback_data="back_home")]
-        ]
-        select_msg = (
-            f"🔢 Select quantity of accounts to buy (Available: `{stock_qty}`):"
-            if lang == "en" else
-            f"🔢 ဝယ်ယူလိုသော **အကောင့် အရေအတွက်** ကို ရွေးချယ်ပါ (ရရှိနိုင်သမျှ: `{stock_qty}`):"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("2 accs", callback_data="qty_2"),
+            types.InlineKeyboardButton("3 accs", callback_data="qty_3")
         )
-        await query.edit_message_text(select_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        markup.add(
+            types.InlineKeyboardButton("5 accs", callback_data="qty_5"),
+            types.InlineKeyboardButton("10 accs", callback_data="qty_10")
+        )
+        bot.edit_message_text("🔢 ဝယ်ယူလိုသော အရေအတွက်ကို ရွေးချယ်ပါ:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
     elif data.startswith("qty_"):
         qty = int(data.split("_")[1])
-        stock_qty = get_stock_count()
-        if qty > stock_qty:
-            msg = f"⚠️ Only {stock_qty} accs left." if lang == "en" else f"⚠️ Stock တွင် {stock_qty} ကောင့်သာ ကျန်ပါတော့သည်။"
-            await query.answer(msg, show_alert=True)
-            return
-        
         total_price = round(qty * PRICE_USDT, 2)
-        invoice_url = create_nowpayments_invoice(total_price, f"{query.from_user.id}_{qty}", f"{qty} X Accounts")
+        invoice_url = create_nowpayments_invoice(total_price, f"{call.from_user.id}_{qty}", f"{qty} X Accounts")
         
         if invoice_url:
-            keyboard = [
-                [InlineKeyboardButton("💳 Pay via NOWPayments (Crypto)", url=invoice_url)],
-                [InlineKeyboardButton("🔙 Back", callback_data="buy_x_acc")]
-            ]
-            msg = (
-                f"💳 **Crypto Instant Payment**\n\nQty: `{qty}` accs\nTotal Amount: `${total_price} USDT`\n\nClick the payment button below to complete purchase."
-                if lang == "en" else
-                f"💳 **Crypto အလိုအလျောက် ငွေပေးချေရန်**\n\nအရေအတွက်: `{qty}` ကောင့်\nကျသင့်ငွေ: `${total_price} USDT`\n\nအောက်ပါ ခလုတ်ကို နှိပ်၍ ငွေလွှဲပေးချေနိုင်ပါသည်။"
-            )
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("💳 Pay via NOWPayments", url=invoice_url))
+            bot.edit_message_text(f"💳 ကျသင့်ငွေ: `{total_price} USDT`\nအောက်ပါခလုတ်ကိုနှိပ်၍ ငွေပေးချေပါ။", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
         else:
-            keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="buy_x_acc")]]
-            msg = "⚠️ Payment Gateway connection error. Please contact Admin."
+            bot.answer_callback_query(call.id, "Payment Gateway Error", show_alert=True)
 
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-# --- Admin Commands ---
-async def add_accounts_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID: return
-    text = update.message.text.replace("/addacc", "").strip()
+@bot.message_handler(commands=['addacc'])
+def add_acc(message):
+    if message.from_user.id != ADMIN_ID: return
+    text = message.text.replace("/addacc", "").strip()
     if not text:
-        await update.message.reply_text("⚠️ ပုံစံ: `/addacc user|pass|link`", parse_mode="Markdown")
+        bot.reply_to(message, "⚠️ ပုံစံ: `/addacc user|pass|link`", parse_mode="Markdown")
         return
     accs = [line.strip() for line in text.split("\n") if line.strip()]
-    added_count = add_accounts_to_db(accs)
-    await update.message.reply_text(f"✅ Stock အသစ် `{added_count}` ကောင့် ထည့်ပြီးပါပြီ။\nလက်ရှိ Stock: `{get_stock_count()}` ကောင့်", parse_mode="Markdown")
+    added = add_accounts_to_db(accs)
+    bot.reply_to(message, f"✅ Stock အသစ် `{added}` ကောင့် ထည့်ပြီးပါပြီ။", parse_mode="Markdown")
 
-async def delete_acc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID: return
-    if not context.args:
-        await update.message.reply_text("⚠️ ပုံစံ: `/delacc @username`", parse_mode="Markdown")
-        return
-    username = context.args[0].strip().lstrip("@")
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM accounts WHERE account_info LIKE ? AND status = 'available'", (f"%{username}%",))
-    deleted_rows = cursor.rowcount
-    conn.commit()
-    conn.close()
-    if deleted_rows > 0:
-        await update.message.reply_text(f"🗑️ `{username}` ({deleted_rows}) ခုကို ဖယ်ရှားပြီးပါပြီ။\nStock: `{get_stock_count()}`", parse_mode="Markdown")
-    else:
-        await update.message.reply_text(f"❌ `{username}` ကို Stock ထဲတွင် မတွေ့ပါ၊", parse_mode="Markdown")
+@bot.message_handler(commands=['stock'])
+def stock_cmd(message):
+    if message.from_user.id != ADMIN_ID: return
+    bot.reply_to(message, f"📦 လက်ရှိ Stock: `{get_stock_count()}` ကောင့်", parse_mode="Markdown")
 
-async def check_stock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID: return
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT account_info FROM accounts WHERE status = 'available'")
-    rows = cursor.fetchall()
-    conn.close()
-    if not rows:
-        await update.message.reply_text("📦 Stock ထဲတွင် အကောင့်မရှိပါ။")
-        return
-    chunk_size = 50
-    for i in range(0, len(rows), chunk_size):
-        chunk = rows[i:i + chunk_size]
-        accs_str = "\n".join([f"{i+j+1}. `{r[0]}`" for j, r in enumerate(chunk)])
-        await update.message.reply_text(f"📦 **လက်ရှိ Stock စာရင်း ({i+1} မှ {i+len(chunk)}):**\n\n{accs_str}", parse_mode="Markdown")
+@bot.message_handler(commands=['ban'])
+def ban_cmd(message):
+    if message.from_user.id != ADMIN_ID: return
+    parts = message.text.split()
+    if len(parts) > 1:
+        ban_user(parts[1])
+        bot.reply_to(message, f"🚫 User ID `{parts[1]}` ကို Ban လိုက်ပါပြီ။", parse_mode="Markdown")
 
-async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID: return
-    limit = int(context.args[0]) if context.args and context.args[0].isdigit() else 20
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT account_info, buyer_id, sold_at FROM accounts WHERE status = 'sold' ORDER BY id DESC LIMIT ?", (limit,))
-    rows = cursor.fetchall()
-    conn.close()
-    if not rows:
-        await update.message.reply_text("📜 ရောင်းရသည့် မှတ်တမ်း မရှိသေးပါ။")
-        return
-    history_msg = f"📜 **နောက်ဆုံး ရောင်းရသည့် အကောင့် ({len(rows)}) ခု:**\n\n"
-    for r in rows:
-        history_msg += f"👤 Buyer ID: `{r[1]}`\n📦 Acc: `{r[0]}`\n⏰ Time: `{r[2]}`\n-------------------\n"
-    await update.message.reply_text(history_msg[:4000], parse_mode="Markdown")
-
-async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID: return
-    await update.message.reply_text("🔄 Database ကို Backup ယူနေပါသည်...")
-    try:
-        backup_file = backup_db()
-        await update.message.reply_document(document=open(backup_file, 'rb'), caption=f"✅ Backup ပြီးပါပြီ: `{os.path.basename(backup_file)}`", parse_mode="Markdown")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Backup Error: `{e}`", parse_mode="Markdown")
-
-async def ban_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID: return
-    if context.args:
-        ban_user(context.args[0])
-        await update.message.reply_text(f"🚫 User ID `{context.args[0]}` ကို Ban လိုက်ပါပြီ။", parse_mode="Markdown")
-
-async def unban_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID: return
-    if context.args:
-        unban_user(context.args[0])
-        await update.message.reply_text(f"✅ User ID `{context.args[0]}` ကို Unban လိုက်ပါပြီ။", parse_mode="Markdown")
-
-# --- Main Application ---
-def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("addacc", add_accounts_cmd))
-    application.add_handler(CommandHandler("delacc", delete_acc_cmd))
-    application.add_handler(CommandHandler("stock", check_stock_cmd))
-    application.add_handler(CommandHandler("history", history_cmd))
-    application.add_handler(CommandHandler("backup", backup_cmd))
-    application.add_handler(CommandHandler("ban", ban_user_cmd))
-    application.add_handler(CommandHandler("unban", unban_user_cmd))
-    
-    application.add_handler(CallbackQueryHandler(button_handler))
-
-    application.run_polling()
+@bot.message_handler(commands=['unban'])
+def unban_cmd(message):
+    if message.from_user.id != ADMIN_ID: return
+    parts = message.text.split()
+    if len(parts) > 1:
+        unban_user(parts[1])
+        bot.reply_to(message, f"✅ User ID `{parts[1]}` ကို Unban လိုက်ပါပြီ။", parse_mode="Markdown")
 
 if __name__ == "__main__":
-    main()
+    print("Bot is running...")
+    bot.infinity_polling()
