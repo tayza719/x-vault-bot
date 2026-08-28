@@ -53,6 +53,14 @@ def init_db():
 
 init_db()
 
+# Admin ထံ အလိုအလျောက် Database Auto Backup ပို့ပေးမည့် Function
+def auto_backup_to_admin(reason="Auto Backup"):
+    try:
+        with open(DB_FILE, 'rb') as f:
+            bot.send_document(ADMIN_ID, f, caption=f"📦 **DB Backup System** ({reason})")
+    except Exception as e:
+        logging.error(f"Auto Backup Failed: {e}")
+
 def get_stock_count(category):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -73,6 +81,8 @@ def add_accounts_to_db(category, acc_list):
             pass
     conn.commit()
     conn.close()
+    if added > 0:
+        auto_backup_to_admin(f"Added {added} {category.upper()} Stock")
     return added
 
 # --- HD WALLET SUB-ADDRESS GENERATOR ---
@@ -265,20 +275,24 @@ def handle_query(call):
 
         if lang == "mm":
             msg = f"💳 **Direct Native Crypto Payment**\n\n" \
-                  f"**Order ID:** `{order_id}`\n" \
-                  f"**Coin:** `{coin.upper()}`\n" \
-                  f"**လွှဲရမည့် ပမာဏ:** `{coin_amount} {coin.upper()}` (${usd_total} USD)\n" \
-                  f"**ငွေလက်ခံမည့် Address:**\n`{address}`\n\n" \
+                  f"🆔 **Order ID:** `{order_id}`\n" \
+                  f"🪙 **Coin:** `{coin.upper()}`\n" \
+                  f"💲 **Total Value:** `${usd_total} USD`\n\n" \
+                  f"⚠️ **EXACT AMOUNT TO SEND (တိကျစွာ လွှဲရမည့် ပမာဏ):**\n" \
+                  f"👉 `{coin_amount}` **{coin.upper()}** 👈\n\n" \
+                  f"📍 **DEPOSIT ADDRESS (ငွေလက်ခံမည့် Address):**\n`{address}`\n\n" \
                   f"⏳ **ငွေလွှဲရန် ကြာချိန်:** `15 မိနစ်`\n" \
-                  f"⚠️ *အထက်ပါ Address သို့ ၁၅ မိနစ်အတွင်း တိကျစွာ လွှဲပေးပါ။ ငွေလွှဲပြီးပါက 'Check Payment' ခလုတ်ကို နှိပ်ပါ။*"
+                  f"🚨 *Network Fee မနှုတ်ဘဲ အထက်ပါ `{coin_amount}` {coin.upper()} တိကျစွာ ရောက်ရှိရန် လွှဲပေးပါ။ ငွေလွှဲပြီးပါက 'Check Payment' ခလုတ်ကို နှိပ်ပါ။*"
         else:
             msg = f"💳 **Direct Native Crypto Payment**\n\n" \
-                  f"**Order ID:** `{order_id}`\n" \
-                  f"**Coin:** `{coin.upper()}`\n" \
-                  f"**Amount to Pay:** `{coin_amount} {coin.upper()}` (${usd_total} USD)\n" \
-                  f"**Deposit Address:**\n`{address}`\n\n" \
+                  f"🆔 **Order ID:** `{order_id}`\n" \
+                  f"🪙 **Coin:** `{coin.upper()}`\n" \
+                  f"💲 **Total Value:** `${usd_total} USD`\n\n" \
+                  f"⚠️ **EXACT AMOUNT TO SEND:**\n" \
+                  f"👉 `{coin_amount}` **{coin.upper()}** 👈\n\n" \
+                  f"📍 **DEPOSIT ADDRESS:**\n`{address}`\n\n" \
                   f"⏳ **Payment Time Limit:** `15 Minutes`\n" \
-                  f"⚠️ *Please send exact amount within 15 minutes. Click 'Check Payment' button after sending.*"
+                  f"🚨 *Please ensure exact `{coin_amount}` {coin.upper()} reaches the address (excluding network fees). Click 'Check Payment' after sending.*"
         
         bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
@@ -312,7 +326,6 @@ def handle_query(call):
             conn.close()
             return
 
-        # 15 Mins Timeout Logic စစ်ဆေးခြင်း
         created_time = datetime.datetime.strptime(created_at_str, "%Y-%m-%d %H:%M:%S")
         time_diff = (datetime.datetime.utcnow() - created_time).total_seconds() / 60.0
         
@@ -352,6 +365,9 @@ def handle_query(call):
                 
                 bot.send_message(user_id, success_msg, parse_mode="Markdown")
                 bot.answer_callback_query(call.id, "Success!", show_alert=False)
+                
+                # User ဝယ်ယူပြီးလျှင် Admin ဆီ DB Auto Backup ပို့ပေးခြင်း
+                auto_backup_to_admin(f"User {user_id} bought {qty} {category.upper()} (Order #{order_id})")
             else:
                 alert_msg = "Stock မလုံလောက်ပါ။ Admin ကို ဆက်သွယ်ပါ။" if lang == "mm" else "Insufficient stock! Please contact Admin."
                 bot.answer_callback_query(call.id, alert_msg, show_alert=True)
@@ -392,6 +408,8 @@ def del_acc(message):
     conn.commit()
     conn.close()
     
+    if deleted > 0:
+        auto_backup_to_admin(f"Deleted {deleted} {category.upper()} Stock")
     bot.reply_to(message, f"🗑️ **{category.upper()}** လက်ကျန် Stock ထဲမှ `{deleted}` ကောင့် ဖျက်ပြီးပါပြီ။", parse_mode="Markdown")
 
 @bot.message_handler(commands=['stock'])
@@ -412,6 +430,31 @@ def check_stock(message):
           f"🔹 **Total Sold:** `{total_sold}` accs"
     bot.reply_to(message, msg, parse_mode="Markdown")
 
+# လက်ရှိ ရောင်းမထွက်သေးဘဲ ကျန်နေသည့် Stock အားလုံးကို Text File ပို့ပေးခြင်း: /allstock
+@bot.message_handler(commands=['allstock'])
+def send_all_stock(message):
+    if message.from_user.id != ADMIN_ID: return
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, category, account_info FROM accounts WHERE status = 'available' ORDER BY id ASC")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        bot.reply_to(message, "📂 လက်ရှိ မရောင်းရသေးသော Stock လုံးဝ မရှိပါ။")
+        return
+
+    file_path = "available_stock_list.txt"
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("=== ALL AVAILABLE STOCK LIST ===\n\n")
+        for r in rows:
+            f.write(f"ID: #{r[0]} | Category: {r[1].upper()} | Account: {r[2]}\n")
+
+    with open(file_path, "rb") as f:
+        bot.send_document(ADMIN_ID, f, caption=f"📦 **Available Stock List** ({len(rows)} accounts)")
+    os.remove(file_path)
+
+# History နောက်ဆုံး ၁၀ ခု ကြည့်ရန်: /history
 @bot.message_handler(commands=['history'])
 def show_history(message):
     if message.from_user.id != ADMIN_ID: return
@@ -431,6 +474,33 @@ def show_history(message):
         history_text += f"{status_icon} **Order #{r[0]}** | User: `{r[1]}` | {r[3]} x {r[2].upper()} | {r[4].upper()} | Status: {r[5]}\n"
         
     bot.reply_to(message, history_text, parse_mode="Markdown")
+
+# Order စာရင်း အကုန်လုံးကို Text File ပို့ပေးခြင်း: /allhistory
+@bot.message_handler(commands=['allhistory'])
+def show_all_history(message):
+    if message.from_user.id != ADMIN_ID: return
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT order_id, user_id, category, qty, coin, address, status, created_at FROM orders ORDER BY order_id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        bot.reply_to(message, "📜 Order မှတ်တမ်း လုံးဝ မရှိသေးပါ။")
+        return
+
+    file_path = "all_orders_history.txt"
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("=== ALL ORDERS HISTORY ===\n\n")
+        for r in rows:
+            f.write(f"Order ID: #{r[0]} | User ID: {r[1]} | Category: {r[2].upper()} | Qty: {r[3]} | Coin: {r[4].upper()}\n")
+            f.write(f"Address: {r[5]}\n")
+            f.write(f"Status: {r[6]} | Date: {r[7]}\n")
+            f.write("-" * 50 + "\n")
+
+    with open(file_path, "rb") as f:
+        bot.send_document(ADMIN_ID, f, caption=f"📜 **All Orders History Export** ({len(rows)} orders)")
+    os.remove(file_path)
 
 @bot.message_handler(commands=['forcepay'])
 def force_pay(message):
@@ -485,6 +555,7 @@ def force_pay(message):
                       
         bot.send_message(user_id, success_msg, parse_mode="Markdown")
         bot.reply_to(message, f"✅ Order `#{order_id}` ကို Force Pay ဖြင့် အကောင့်ထုတ်ပေးလိုက်ပါပြီ။")
+        auto_backup_to_admin(f"Force Pay Order #{order_id}")
     else:
         bot.reply_to(message, f"❌ Stock မလုံလောက်ပါ။ (လိုအပ်ချက်: {qty})")
         
@@ -493,11 +564,7 @@ def force_pay(message):
 @bot.message_handler(commands=['backup'])
 def send_backup(message):
     if message.from_user.id != ADMIN_ID: return
-    try:
-        with open(DB_FILE, 'rb') as f:
-            bot.send_document(ADMIN_ID, f, caption="📦 **Database Backup File (store.db)**")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Backup ယူ၍ မရပါ: {e}")
+    auto_backup_to_admin("Manual Requested Backup")
 
 if __name__ == "__main__":
     print("Bot is running as worker...")
