@@ -314,6 +314,7 @@ def main():
     
     application.add_handler(CallbackQueryHandler(button_handler))
 
+    # This handles the async loop properly
     application.run_polling()
 
 if __name__ == "__main__":
