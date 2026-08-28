@@ -369,6 +369,9 @@ def handle_query(call):
                 success_msg = f"🎉 **Payment Successful / ငွေပေးချေမှု အောင်မြင်ပါသည်!**\n\n" \
                               f"📦 **Your Accounts / ဝယ်ယူလိုက်သော အကောင့်များ:**\n" \
                               f"`{acc_text}`\n\n" \
+                              f"💡 **Code ယူနည်း / How to get OTP Code:**\n" \
+                              f"🇲🇲 အကောင့်ဝင်စဉ် OTP Code တောင်းပါက စာကြောင်းထဲတွင်ပါသော Link ကို Browser တွင် ဖွင့်၍ Code ယူပါ။\n" \
+                              f"🇬🇧 If prompted for OTP code, open the included link in your browser to get the code.\n\n" \
                               f"━━━━━━━━━━━━━━━━━━━\n" \
                               f"📌 **Note / သတိပြုရန်:**\n" \
                               f"🇲🇲 ကျေးဇူးတင်ပါသည်။ အကောင့်ရရှိပြီးပါက Mail Password ကို ချက်ချင်း ပြောင်းလဲပေးပါ။\n" \
@@ -574,6 +577,9 @@ def force_pay(message):
         success_msg = f"🔧 **[Admin Bypass] Payment Successful!**\n\n" \
                       f"📦 **Your Accounts / ဝယ်ယူလိုက်သော အကောင့်များ:**\n" \
                       f"`{acc_text}`\n\n" \
+                      f"💡 **Code ယူနည်း / How to get OTP Code:**\n" \
+                      f"🇲🇲 အကောင့်ဝင်စဉ် OTP Code တောင်းပါက စာကြောင်းထဲတွင်ပါသော Link ကို Browser တွင် ဖွင့်၍ Code ယူပါ။\n" \
+                      f"🇬🇧 If prompted for OTP code, open the included link in your browser to get the code.\n\n" \
                       f"━━━━━━━━━━━━━━━━━━━\n" \
                       f"📌 **Note / သတိပြုရန်:**\n" \
                       f"🇲🇲 ကျေးဇူးတင်ပါသည်။ အကောင့်ရရှိပြီးပါက Mail Password ကို ချက်ချင်း ပြောင်းလဲပေးပါ။\n" \
