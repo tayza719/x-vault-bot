@@ -12,6 +12,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 MNEMONIC = os.getenv("MASTER_MNEMONIC")
 DATABASE_URL = os.getenv("DATABASE_URL")
+CHANNEL_ID = "@alphavalut"  # 📢 Channel Username သို့မဟုတ် ID
 
 PRICES = {"x": 0.15, "outlook": 0.10}
 MAINTENANCE_MODE = False
@@ -160,6 +161,7 @@ def send_welcome(message):
         types.InlineKeyboardButton("🇲🇲 မြန်မာစာ", callback_data="lang_mm"),
         types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
     )
+    markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/alphavalut"))
     bot.send_message(message.chat.id, "🌐 **Please select your language**", reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(commands=['on', 'off'])
@@ -196,6 +198,50 @@ def add_acc(message):
     
     added, dupes = add_accounts_to_db(category, acc_lines)
     bot.reply_to(message, f"✅ **{category.upper()} Stock အသစ် {added} ကောင့် ထည့်သွင်းပြီးပါပြီ!**\n(Duplicates: {dupes})", parse_mode="Markdown")
+    
+    # 📢 Channel သို့ Stock အသစ်ဖြည့်ထားကြောင်း အကြောင်းကြားရန်
+    if added > 0:
+        channel_noti = f"📦 **[NEW STOCK ADDED]**\n🔹 Category: `{category.upper()}`\n📈 Qty Added: `{added}` Accounts\n🛒 ဝယ်ယူလိုပါက Bot ထဲတွင် လာရောက်ဝယ်ယူနိုင်ပါပြီ။"
+        try:
+            bot.send_message(CHANNEL_ID, channel_noti, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Channel Stock Noti Failed: {e}")
+
+@bot.message_handler(commands=['delacc'])
+def delete_acc(message):
+    if message.from_user.id != ADMIN_ID: return
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        bot.reply_to(message, "⚠️ အသုံးပြုပုံ:\n• ID ဖြင့်ဖျက်ရန်: `/delacc id <account_id>`\n• စာသားဖြင့်ဖျက်ရန်: `/delacc info <account_info>`", parse_mode="Markdown")
+        return
+        
+    mode = parts[1].lower()
+    target = parts[2].strip()
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    if mode == "id" and target.isdigit():
+        cursor.execute("DELETE FROM accounts WHERE id = %s", (int(target),))
+        row_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        if row_count > 0:
+            bot.reply_to(message, f"🗑️ **ID #{target} ပါသော အကောင့်ကို အောင်မြင်စွာ ဖျက်လိုက်ပါပြီ။**", parse_mode="Markdown")
+        else:
+            bot.reply_to(message, f"❌ ID #{target} ကို မတွေ့ရှိပါ။")
+    elif mode == "info":
+        cursor.execute("DELETE FROM accounts WHERE account_info = %s", (target,))
+        row_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        if row_count > 0:
+            bot.reply_to(message, "🗑️ **အဆိုပါ အကောင့်ကို Stock ထဲမှ အောင်မြင်စွာ ဖျက်လိုက်ပါပြီ။**", parse_mode="Markdown")
+        else:
+            bot.reply_to(message, "❌ ထိုကဲ့သို့သော အကောင့် Stock ထဲတွင် မရှိပါ။")
+    else:
+        conn.close()
+        bot.reply_to(message, "⚠️ ပုံစံ မှားယွင်းနေပါသည်။ `/delacc id <id>` သို့မဟုတ် `/delacc info <text>` ဟု သုံးပါ။", parse_mode="Markdown")
 
 @bot.message_handler(commands=['stock'])
 def check_stock_admin(message):
@@ -288,7 +334,7 @@ def force_pay(message):
     order_id = int(parts[1])
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, category, qty, status FROM orders WHERE order_id = %s", (order_id,))
+    cursor.execute("SELECT user_id, category, qty, coin, amount_coin, status FROM orders WHERE order_id = %s", (order_id,))
     order = cursor.fetchone()
     
     if not order:
@@ -296,7 +342,7 @@ def force_pay(message):
         conn.close()
         return
 
-    user_id, category, qty, status = order
+    user_id, category, qty, coin, amount_coin, status = order
     if status == 'completed':
         bot.reply_to(message, "⚠️ ဒီ Order သည် အကောင့်ထုတ်ပေးပြီးသား ဖြစ်နေပါပြီ။")
         conn.close()
@@ -328,6 +374,13 @@ def force_pay(message):
             bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။")
         except Exception as e:
             bot.reply_to(message, f"⚠️ User ထံ ပို့၍မရပါ: {e}")
+            
+        # 📢 Channel သို့ ဝယ်ယူမှု Notification ပို့ရန်
+        channel_noti = f"🛍️ **[NEW PURCHASE SUCCESS]**\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n🪙 Paid Coin: `{coin.upper()}`"
+        try:
+            bot.send_message(CHANNEL_ID, channel_noti, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Channel Purchase Noti Failed: {e}")
     else:
         bot.reply_to(message, f"❌ Stock မလုံလောက်ပါ (လိုအပ်ချက်: {qty})")
         
@@ -356,6 +409,7 @@ def handle_query(call):
             types.InlineKeyboardButton("🛒 X Accounts", callback_data=f"cat_x_{lang}"),
             types.InlineKeyboardButton("📧 Outlook Accounts", callback_data=f"cat_outlook_{lang}")
         )
+        markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/alphavalut"))
         bot.edit_message_text(welcome_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif data.startswith("cat_"):
@@ -520,12 +574,12 @@ def handle_query(call):
                 except Exception as e:
                     logging.error(f"User Message Failed: {e}")
                 
-                admin_noti = f"🔔 **[NEW PURCHASE]**\n👤 User: `{user_id}`\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n💰 Paid: `{current_balance}` {coin.upper()}"
+                # 📢 Channel သို့ ဝယ်ယူမှု Notification ပို့ရန်
+                channel_noti = f"🛍️ **[NEW PURCHASE SUCCESS]**\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n🪙 Paid Coin: `{coin.upper()}`"
                 try:
-                    bot.send_message(ADMIN_ID, admin_noti, parse_mode="Markdown")
+                    bot.send_message(CHANNEL_ID, channel_noti, parse_mode="Markdown")
                 except Exception as e:
-                    logging.error(f"Admin Noti Failed: {e}")
-                    
+                    logging.error(f"Channel Purchase Noti Failed: {e}")
             else:
                 bot.answer_callback_query(call.id, "❌ Stock မလုံလောက်ပါ။ Admin ကို ဆက်သွယ်ပါ။", show_alert=True)
         else:
