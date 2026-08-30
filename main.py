@@ -13,7 +13,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 MNEMONIC = os.getenv("MNEMONIC")
 DATABASE_URL = os.getenv("DATABASE_URL")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@alphavalut")
-ADMIN_CHANNEL_ID = -1004306575654  # <-- Feature အသစ်: Admin Channel ID
+ADMIN_CHANNEL_ID = -1004306575654  # Admin Channel ID အသစ်
 BOT_USERNAME = "SocialXStoreBot"
 
 PRICES = {"x": 0.15, "outlook": 0.10}
@@ -22,18 +22,15 @@ MAINTENANCE_MODE = False
 logging.basicConfig(level=logging.INFO)
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- Feature အသစ်: Admin Channel သို့ Noti နဲ့ File ပို့ရန် Function ---
+# Admin Channel သို့ Noti ပို့ရန် Function
 def send_admin_noti(message_text, file_path=None):
-    """Admin Channel ကို Noti နဲ့ File ပို့တယ်"""
     try:
         bot.send_message(ADMIN_CHANNEL_ID, message_text, parse_mode="Markdown")
         if file_path and os.path.exists(file_path):
             with open(file_path, "rb") as f:
                 bot.send_document(ADMIN_CHANNEL_ID, f)
-        logging.info("Admin notification sent")
     except Exception as e:
         logging.error(f"Admin Channel Error: {e}")
-
 
 def get_db():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -375,7 +372,7 @@ def force_pay(message):
         bot.send_document(ADMIN_ID, f, caption=f"📂 Force Pay Sale Order #{order_id}")
     os.remove(file_path)
 
-    # --- Feature အသစ်: Admin Channel သို့ Alert ပို့ခြင်း ---
+    # Admin Channel သို့ Noti ပို့ရန်
     admin_msg = f"""
 🚨 NEW PURCHASE ALERT
 📊 User: {user_id}
@@ -561,7 +558,7 @@ def handle_query(call):
                     bot.send_document(ADMIN_ID, f, caption=f"📂 **New Sale Order #{order_id}**", parse_mode="Markdown")
                 os.remove(file_path)
 
-                # --- Feature အသစ်: Admin Channel သို့ Alert ပို့ခြင်း ---
+                # Admin Channel သို့ Noti ပို့ရန်
                 admin_msg = f"""
 🚨 NEW PURCHASE ALERT
 📊 User: {user_id}
