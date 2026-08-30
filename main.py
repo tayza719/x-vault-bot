@@ -60,19 +60,24 @@ init_db()
 
 def generate_hd_address(coin: str, index: int) -> str:
     seed_bytes = Bip39SeedGenerator(MNEMONIC).Generate()
+    addr = None
     if coin == "sol":
         bip_mst = Bip44.FromSeed(seed_bytes, Bip44Coins.SOLANA)
-        return bip_mst.Purpose().Coin().Account(index).PublicKey().ToAddress()
+        addr = bip_mst.Purpose().Coin().Account(index).PublicKey().ToAddress()
     elif coin == "pol":
         bip_mst = Bip44.FromSeed(seed_bytes, Bip44Coins.POLYGON)
-        return bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
+        addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
+        if addr:
+            addr = addr.lower()
     elif coin == "bnb":
         bip_mst = Bip44.FromSeed(seed_bytes, Bip44Coins.BINANCE_SMART_CHAIN)
-        return bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
+        addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
+        if addr:
+            addr = addr.lower()
     elif coin == "trx":
         bip_mst = Bip44.FromSeed(seed_bytes, Bip44Coins.TRON)
-        return bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
-    return None
+        addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
+    return addr
 
 def get_crypto_amount(usd_amount: float, coin: str) -> float:
     coin_ids = {"sol": "solana", "pol": "polygon-ecosystem-token", "bnb": "binancecoin", "trx": "tron"}
@@ -168,29 +173,6 @@ def toggle_maintenance(message):
         MAINTENANCE_MODE = False
         bot.reply_to(message, "✅ **Maintenance Mode ပိတ်လိုက်ပါပြီ။** User များ ပြန်သုံးနိုင်ပါပြီ။")
 
-@bot.message_handler(commands=['export'])
-def export_available_stock(message):
-    if message.from_user.id != ADMIN_ID: return
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, category, account_info FROM accounts WHERE status = 'available'")
-    rows = cursor.fetchall()
-    conn.close()
-    
-    if not rows:
-        bot.reply_to(message, "⚠️ ထုတ်ယူစရာ Available Stock မရှိပါ။")
-        return
-        
-    file_path = "available_stock.txt"
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write("=== AVAILABLE STOCK LIST ===\n\n")
-        for r in rows:
-            f.write(f"{r[2]}\n")
-            
-    with open(file_path, "rb") as f:
-        bot.send_document(ADMIN_ID, f, caption=f"📦 **Available Stock သီးသန့်:** {len(rows)} ကောင့်", parse_mode="Markdown")
-    os.remove(file_path)
-
 @bot.message_handler(commands=['resetacc'])
 def reset_sold_accounts(message):
     if message.from_user.id != ADMIN_ID: return
@@ -220,7 +202,80 @@ def check_stock_admin(message):
     if message.from_user.id != ADMIN_ID: return
     x_count = get_stock_count('x')
     out_count = get_stock_count('outlook')
-    bot.reply_to(message, f"📊 **Current Store Status**\n\n🔹 X Available: {x_count}\n🔹 Outlook Available: {out_count}", parse_mode="Markdown")
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM accounts WHERE status = 'sold'")
+    total_sold = cursor.fetchone()[0]
+    conn.close()
+    bot.reply_to(message, f"📊 **Current Store Status**\n\n🔹 X Available: {x_count}\n🔹 Outlook Available: {out_count}\n🔸 Total Sold: {total_sold}", parse_mode="Markdown")
+
+@bot.message_handler(commands=['allstock'])
+def send_all_stock(message):
+    if message.from_user.id != ADMIN_ID: return
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, category, account_info FROM accounts WHERE status = 'available'")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        bot.reply_to(message, "⚠️ လက်ရှိ ရရှိနိုင်သော Stock လုံးဝ မရှိသေးပါ။")
+        return
+        
+    file_path = "available_stock_list.txt"
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("=== ALL AVAILABLE STOCK LIST ===\n\n")
+        for r in rows:
+            f.write(f"ID: {r[0]} | Category: {r[1].upper()} | Account: {r[2]}\n")
+            
+    with open(file_path, "rb") as f:
+        bot.send_document(ADMIN_ID, f, caption=f"📦 **Available Stock List (Total: {len(rows)})**", parse_mode="Markdown")
+    os.remove(file_path)
+
+@bot.message_handler(commands=['history'])
+def show_history(message):
+    if message.from_user.id != ADMIN_ID: return
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT order_id, user_id, category, qty, coin, status FROM orders ORDER BY order_id DESC LIMIT 10")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        bot.reply_to(message, "⚠️ Order မှတ်တမ်း လုံးဝ မရှိသေးပါ။")
+        return
+        
+    history_text = "📜 **Recent 10 Orders History:**\n\n"
+    for r in rows:
+        status_icon = "✅" if r[5] == 'completed' else "❌" if r[5] == 'expired' else "⏳"
+        history_text += f"{status_icon} Order `#{r[0]}` | User: `{r[1]}` | {r[3]} {r[2].upper()} | Pay: {r[4].upper()}\n"
+    bot.reply_to(message, history_text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['allhistory'])
+def show_all_history(message):
+    if message.from_user.id != ADMIN_ID: return
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT order_id, user_id, category, qty, coin, address, status, created_at FROM orders ORDER BY order_id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        bot.reply_to(message, "⚠️ Order မှတ်တမ်း လုံးဝ မရှိသေးပါ။")
+        return
+        
+    file_path = "all_orders_history.txt"
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("=== ALL ORDERS HISTORY ===\n\n")
+        for r in rows:
+            f.write(f"Order ID: #{r[0]} | User ID: {r[1]} | Category: {r[2].upper()} | Qty: {r[3]}\n")
+            f.write(f"Coin: {r[4].upper()} | Address: {r[5]}\n")
+            f.write(f"Status: {r[6]} | Date: {r[7]}\n")
+            f.write("-" * 50 + "\n")
+            
+    with open(file_path, "rb") as f:
+        bot.send_document(ADMIN_ID, f, caption="📜 **All Orders History File**", parse_mode="Markdown")
+    os.remove(file_path)
 
 @bot.message_handler(commands=['forcepay'])
 def force_pay(message):
@@ -260,7 +315,13 @@ def force_pay(message):
         conn.commit()
         
         acc_text = "\n".join(accounts_info)
-        success_msg = f"🎉 **[Admin Bypass] Payment Successful!**\n\n📦 **Your Accounts / ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n🙏 Thank you for your purchase!"
+        success_msg = (
+            f"🎉 **Payment Successful / ငွေပေးချေမှု အောင်မြင်ပါသည်!**\n\n"
+            f"📦 **Your Accounts / ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n"
+            f"📌 **Note / သတိပေးချက်:**\n"
+            f"အကောင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းပြောင်းလဲ အသုံးပြုပါရန်။ ကျေးဇူးတင်ပါသည်။\n"
+            f"Please change password and details immediately after receiving accounts. Thank you!"
+        )
         
         try:
             bot.send_message(user_id, success_msg, parse_mode="Markdown")
@@ -306,14 +367,14 @@ def handle_query(call):
         unit_price = PRICES[category]
         
         if stock_qty < 2:
-            bot.answer_callback_query(call.id, "Stock မလုံလောက်ပါ (အနည်းဆုံး ၂ ကောင့် လိုအပ်ပါသည်)", show_alert=True)
+            bot.answer_callback_query(call.id, "Stock မလုံလောက်ပါ (အနည်းဆုံး ၂ ကောင့် လိုအပ်ပါသည်)" if lang=="mm" else "Stock not enough (Min 2 required)", show_alert=True)
             return
             
         markup = types.InlineKeyboardMarkup()
         for q in [2, 4, 6, 8, 10, 15, 20]:
             if q <= stock_qty:
                 markup.add(types.InlineKeyboardButton(f"🛒 {q} accs (${round(q*unit_price, 2)})", callback_data=f"qty_{category}_{q}_{lang}"))
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"lang_{lang}"))
+        markup.add(types.InlineKeyboardButton("🔙 Back" if lang=="en" else "🔙 နောက်သို့", callback_data=f"lang_{lang}"))
         
         title = f"🛒 **{category.upper()}** ဝယ်ယူမည့်ပမာဏကို ရွေးချယ်ပါ -" if lang == "mm" else f"🛒 Select quantity for **{category.upper()}** -"
         bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
@@ -326,7 +387,7 @@ def handle_query(call):
         
         stock_qty = get_stock_count(category)
         if qty > stock_qty:
-            bot.answer_callback_query(call.id, f"Stock မလုံလောက်ပါ (လက်ကျန်: {stock_qty})", show_alert=True)
+            bot.answer_callback_query(call.id, f"Stock မလုံလောက်ပါ (လက်ကျန်: {stock_qty})" if lang=="mm" else f"Stock not enough (Available: {stock_qty})", show_alert=True)
             return
             
         markup = types.InlineKeyboardMarkup()
@@ -338,7 +399,7 @@ def handle_query(call):
             types.InlineKeyboardButton("BNB Chain (BNB)", callback_data=f"pay_{category}_{qty}_bnb_{lang}"),
             types.InlineKeyboardButton("TRON (TRX)", callback_data=f"pay_{category}_{qty}_trx_{lang}")
         )
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"cat_{category}_{lang}"))
+        markup.add(types.InlineKeyboardButton("🔙 Back" if lang=="en" else "🔙 နောက်သို့", callback_data=f"cat_{category}_{lang}"))
         
         pay_title = "🪙 **ငွေပေးချေလိုသော Native Coin ကို ရွေးချယ်ပါ။**" if lang == "mm" else "🪙 **Select payment coin.**"
         bot.edit_message_text(pay_title, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
@@ -354,7 +415,7 @@ def handle_query(call):
         coin_amount = get_crypto_amount(usd_total, coin)
         
         if not coin_amount:
-            bot.answer_callback_query(call.id, "Crypto ဈေးနှုန်း ယူ၍မရပါ။ ခေတ္တစောင့်ဆိုင်းပါ။", show_alert=True)
+            bot.answer_callback_query(call.id, "Crypto ဈေးနှုန်း ယူ၍မရပါ။ ခေတ္တစောင့်ဆိုင်းပါ။" if lang=="mm" else "Failed to get crypto price.", show_alert=True)
             return
             
         created_time = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
@@ -375,7 +436,7 @@ def handle_query(call):
         markup = types.InlineKeyboardMarkup()
         btn_text = "✅ Check Payment (ငွေစစ်မည်)" if lang == "mm" else "✅ Check Payment"
         markup.add(types.InlineKeyboardButton(btn_text, callback_data=f"check_{order_id}_{lang}"))
-        markup.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"qty_{category}_{qty}_{lang}"))
+        markup.add(types.InlineKeyboardButton("🔙 Back" if lang=="en" else "🔙 နောက်သို့", callback_data=f"qty_{category}_{qty}_{lang}"))
         
         if lang == "mm":
             msg = f"💳 **Direct Native Crypto Payment**\n\n" \
@@ -445,7 +506,13 @@ def handle_query(call):
                 conn.commit()
                 
                 acc_text = "\n".join(accounts_info)
-                success_msg = f"🎉 **Payment Successful!**\n\n📦 **Your Accounts:**\n`{acc_text}`\n\n🙏 Thank you!"
+                success_msg = (
+                    f"🎉 **Payment Successful / ငွေပေးချေမှု အောင်မြင်ပါသည်!**\n\n"
+                    f"📦 **Your Accounts / ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n"
+                    f"📌 **Note / သတိပေးချက်:**\n"
+                    f"အကောင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းပြောင်းလဲ အသုံးပြုပါရန်။ ကျေးဇူးတင်ပါသည်။\n"
+                    f"Please change password and details immediately after receiving accounts. Thank you!"
+                )
                 
                 try:
                     bot.send_message(user_id, success_msg, parse_mode="Markdown")
