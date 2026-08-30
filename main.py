@@ -41,7 +41,8 @@ def init_db():
             status VARCHAR(20) DEFAULT 'available',
             buyer_id BIGINT,
             sold_at TEXT,
-            order_id INT
+            order_id INT,
+            forcepay_test BOOLEAN DEFAULT FALSE
         )
     ''')
     
@@ -75,6 +76,10 @@ def init_db():
     cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='accounts' AND column_name='order_id'")
     if not cursor.fetchone():
         cursor.execute("ALTER TABLE accounts ADD COLUMN order_id INT")
+
+    cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='accounts' AND column_name='forcepay_test'")
+    if not cursor.fetchone():
+        cursor.execute("ALTER TABLE accounts ADD COLUMN forcepay_test BOOLEAN DEFAULT FALSE")
 
     cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='orders' AND column_name='payment_method'")
     if not cursor.fetchone():
@@ -196,7 +201,7 @@ def add_accounts_to_db(category, acc_list):
         for account_info in clean_accounts:
             cursor.execute(
                 """
-                SELECT id, category, status, order_id
+                SELECT id, category, status, order_id, forcepay_test
                   FROM accounts
                  WHERE account_info = %s
                 FOR UPDATE
@@ -217,26 +222,19 @@ def add_accounts_to_db(category, acc_list):
                 added_accounts.append(cursor.fetchone()[0])
                 continue
 
-            account_id, existing_category, status, linked_order_id = existing
-            payment_method = None
-            if linked_order_id is not None:
-                cursor.execute(
-                    "SELECT payment_method FROM orders WHERE order_id = %s",
-                    (linked_order_id,),
-                )
-                order_row = cursor.fetchone()
-                payment_method = order_row[0] if order_row else None
+            account_id, existing_category, status, linked_order_id, forcepay_test = existing
 
             if (
                 existing_category == category
-                and status == 'sold'
-                and payment_method == 'forcepay'
+                and forcepay_test is True
+                and status in ('sold', 'available')
             ):
                 cursor.execute(
                     """
                     UPDATE accounts
                        SET status = 'available', buyer_id = NULL,
-                           sold_at = NULL, order_id = NULL
+                           sold_at = NULL, order_id = NULL,
+                           forcepay_test = FALSE
                      WHERE id = %s
                     """,
                     (account_id,),
@@ -321,13 +319,9 @@ def reset_sold_accounts(message):
     cursor.execute(
         """
         UPDATE accounts
-           SET status = 'available', buyer_id = NULL, sold_at = NULL, order_id = NULL
-         WHERE status = 'sold'
-           AND order_id IN (
-               SELECT order_id
-                 FROM orders
-                WHERE status = 'completed' AND payment_method = 'forcepay'
-           )
+           SET status = 'available', buyer_id = NULL, sold_at = NULL,
+               order_id = NULL, forcepay_test = FALSE
+         WHERE status = 'sold' AND forcepay_test = TRUE
         """
     )
     reset_count = cursor.rowcount
@@ -532,7 +526,8 @@ def force_pay(message):
         # Keep the rows so an admin can safely re-add this specific forcepay order.
         now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
-            "UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s",
+            "UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, "
+            "order_id = %s, forcepay_test = TRUE WHERE id IN %s",
             (user_id, now_str, order_id, account_ids),
         )
         cursor.execute(
@@ -614,8 +609,9 @@ def readd_forcepay_accounts(message):
         cursor.execute(
             """
             UPDATE accounts
-               SET status = 'available', buyer_id = NULL, sold_at = NULL, order_id = NULL
-             WHERE order_id = %s AND status = 'sold'
+               SET status = 'available', buyer_id = NULL, sold_at = NULL,
+                   order_id = NULL, forcepay_test = TRUE
+             WHERE order_id = %s AND status = 'sold' AND forcepay_test = TRUE
             """,
             (order_id,),
         )
@@ -720,19 +716,27 @@ def handle_query(call):
             return
             
         created_time = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO orders (user_id, category, qty, coin, address, amount_coin, status, created_at) VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s) RETURNING order_id",
-            (call.from_user.id, category, qty, coin, "pending", coin_amount, created_time)
-        )
-        order_id = cursor.fetchone()[0]
-        conn.commit()
-        
-        address = generate_hd_address(coin, order_id)
-        cursor.execute("UPDATE orders SET address = %s WHERE order_id = %s", (address, order_id))
-        conn.commit()
-        conn.close()
+        try:
+            # Keep order creation atomic: never expose a pending order without
+            # a valid deposit address.
+            with get_db() as conn, conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO orders (user_id, category, qty, coin, address, amount_coin, status, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s) RETURNING order_id",
+                    (call.from_user.id, category, qty, coin, "pending", coin_amount, created_time),
+                )
+                order_id = cursor.fetchone()[0]
+                address = generate_hd_address(coin, order_id)
+                if not address:
+                    raise RuntimeError("Deposit address generation failed")
+                cursor.execute(
+                    "UPDATE orders SET address = %s WHERE order_id = %s",
+                    (address, order_id),
+                )
+        except Exception as e:
+            logging.error(f"Order creation failed: {e}")
+            bot.answer_callback_query(call.id, "Payment order မဖန်တီးနိုင်သေးပါ။ ပြန်စမ်းပါ။" if lang == "mm" else "Could not create payment order. Please retry.", show_alert=True)
+            return
         
         markup = types.InlineKeyboardMarkup()
         btn_text = "✅ Check Payment (ငွေစစ်မည်)" if lang == "mm" else "✅ Check Payment"
@@ -807,7 +811,11 @@ def handle_query(call):
                 now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
                 
                 # Real crypto purchase: mark as sold. Rows remain in the database for audit/history.
-                cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s", (user_id, now_str, order_id, account_ids))
+                cursor.execute(
+                    "UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, "
+                    "order_id = %s, forcepay_test = FALSE WHERE id IN %s",
+                    (user_id, now_str, order_id, account_ids),
+                )
                 cursor.execute("UPDATE orders SET status = 'completed', payment_method = 'crypto' WHERE order_id = %s", (order_id,))
                 conn.commit()
                 
