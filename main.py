@@ -10,9 +10,10 @@ from bip_utils import Bip39SeedGenerator, Bip44, Bip44Coins, Bip44Changes
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+ADMIN_CHANNEL_ID = -1004306575654  # Admin Private Noti Channel
 MNEMONIC = os.getenv("MASTER_MNEMONIC")
 DATABASE_URL = os.getenv("DATABASE_URL")
-CHANNEL_ID = "@alphavalut"
+CHANNEL_ID = "@alphavalut" # Public Channel
 BOT_USERNAME = "SocialXStoreBot"
 
 PRICES = {"x": 0.15, "outlook": 0.10}
@@ -21,12 +22,16 @@ MAINTENANCE_MODE = False
 logging.basicConfig(level=logging.INFO)
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# ==========================================
+# DATABASE FUNCTIONS
+# ==========================================
 def get_db():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS accounts (
             id SERIAL PRIMARY KEY,
@@ -37,6 +42,7 @@ def init_db():
             sold_at TEXT
         )
     ''')
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS orders (
             order_id SERIAL PRIMARY KEY,
@@ -50,15 +56,46 @@ def init_db():
             created_at TEXT
         )
     ''')
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY
+            user_id BIGINT PRIMARY KEY,
+            is_banned BOOLEAN DEFAULT FALSE
         )
     ''')
+    
+    # Auto-migrate for is_banned column
+    cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='is_banned'")
+    if not cursor.fetchone():
+        cursor.execute("ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT FALSE")
+        
     conn.commit()
     conn.close()
 
 init_db()
+
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
+def is_banned(user_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_banned FROM users WHERE user_id = %s", (user_id,))
+    res = cursor.fetchone()
+    conn.close()
+    return res[0] if res else False
+
+def send_admin_noti(message_text, file_path=None):
+    """File ပါလျှင် Caption အနေဖြင့်တွဲပို့ပြီး၊ မပါလျှင် စာချည်းသက်သက်ပို့သော Admin Noti စနစ်"""
+    try:
+        if file_path and os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                bot.send_document(ADMIN_CHANNEL_ID, f, caption=message_text, parse_mode="Markdown")
+        else:
+            bot.send_message(ADMIN_CHANNEL_ID, message_text, parse_mode="Markdown")
+        logging.info("Admin Channel Noti Sent.")
+    except Exception as e:
+        logging.error(f"Admin Channel Error: {e}")
 
 def generate_hd_address(coin: str, index: int) -> str:
     seed_bytes = Bip39SeedGenerator(MNEMONIC).Generate()
@@ -69,13 +106,11 @@ def generate_hd_address(coin: str, index: int) -> str:
     elif coin == "pol":
         bip_mst = Bip44.FromSeed(seed_bytes, Bip44Coins.POLYGON)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
-        if addr:
-            addr = addr.lower()
+        if addr: addr = addr.lower()
     elif coin == "bnb":
         bip_mst = Bip44.FromSeed(seed_bytes, Bip44Coins.BINANCE_SMART_CHAIN)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
-        if addr:
-            addr = addr.lower()
+        if addr: addr = addr.lower()
     elif coin == "trx":
         bip_mst = Bip44.FromSeed(seed_bytes, Bip44Coins.TRON)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
@@ -112,8 +147,7 @@ def check_blockchain_balance(address: str, coin: str) -> float:
         elif coin == "trx":
             url = f"https://api.trongrid.io/v1/accounts/{address}"
             res = requests.get(url, timeout=10).json()
-            if res.get('data'):
-                return res.get('data')[0].get('balance', 0) / 1e6
+            if res.get('data'): return res.get('data')[0].get('balance', 0) / 1e6
             return 0.0
     except Exception as e:
         logging.error(f"Blockchain Check Error ({coin}): {e}")
@@ -144,13 +178,20 @@ def add_accounts_to_db(category, acc_list):
     conn.close()
     return added, duplicates
 
+# ==========================================
+# COMMAND HANDLERS
+# ==========================================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    if MAINTENANCE_MODE and message.from_user.id != ADMIN_ID:
+    user_id = message.from_user.id
+    if is_banned(user_id):
+        bot.reply_to(message, "🚫 သင်သည် ဤစနစ်ကို အသုံးပြုခွင့် ပိတ်ပင်ခံထားရပါသည်။")
+        return
+
+    if MAINTENANCE_MODE and user_id != ADMIN_ID:
         bot.reply_to(message, "🛠️ **စနစ် အဆင့်မြှင့်တင်နေပါသည်။**\nခေတ္တခဏ စောင့်ဆိုင်းပေးပါခင်ဗျာ။", parse_mode="Markdown")
         return
 
-    user_id = message.from_user.id
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (user_id,))
@@ -162,8 +203,31 @@ def send_welcome(message):
         types.InlineKeyboardButton("🇲🇲 မြန်မာစာ", callback_data="lang_mm"),
         types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
     )
-    markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/alphavalut"))
+    markup.add(types.InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}"))
     bot.send_message(message.chat.id, "🌐 **Please select your language**", reply_markup=markup, parse_mode="Markdown")
+
+@bot.message_handler(commands=['ban', 'unban'])
+def handle_ban_system(message):
+    if message.from_user.id != ADMIN_ID: return
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, "⚠️ အသုံးပြုရန်: `/ban <user_id>` သို့မဟုတ် `/unban <user_id>`", parse_mode="Markdown")
+        return
+        
+    target_id = parts[1]
+    command = parts[0].lower()
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    if command == '/ban':
+        cursor.execute("UPDATE users SET is_banned = TRUE WHERE user_id = %s", (target_id,))
+        bot.reply_to(message, f"✅ User {target_id} ကို Ban လိုက်ပါပြီ။")
+    else:
+        cursor.execute("UPDATE users SET is_banned = FALSE WHERE user_id = %s", (target_id,))
+        bot.reply_to(message, f"✅ User {target_id} ကို Unban လုပ်ပေးလိုက်ပါပြီ။")
+        
+    conn.commit()
+    conn.close()
 
 @bot.message_handler(commands=['on', 'off'])
 def toggle_maintenance(message):
@@ -193,6 +257,7 @@ def add_acc(message):
     raw_text = message.text.replace("/addacc", "").strip()
     if not raw_text: return
     parts = raw_text.split(maxsplit=1)
+    if len(parts) < 2: return
     category = parts[0].lower()
     acc_data = parts[1].strip()
     acc_lines = [line.strip() for line in acc_data.split("\n") if line.strip()]
@@ -201,15 +266,16 @@ def add_acc(message):
     bot.reply_to(message, f"✅ **{category.upper()} Stock အသစ် {added} ကောင့် ထည့်သွင်းပြီးပါပြီ!**\n(Duplicates: {dupes})", parse_mode="Markdown")
     
     if added > 0:
-        # 1. Admin ဆီသို့ ထည့်လိုက်သည့်အကောင့်များကို File ဖြင့်ပို့ပေးခြင်း
         file_path = f"added_stock_{category}.txt"
         with open(file_path, "w", encoding="utf-8") as f:
             f.write("\n".join(acc_lines))
-        with open(file_path, "rb") as f:
-            bot.send_document(ADMIN_ID, f, caption=f"📥 **Newly Added {category.upper()} Accounts (Qty: {added})**", parse_mode="Markdown")
+        
+        # 1. Admin Noti Channel သို့ File အပါ Noti ပို့ခြင်း
+        admin_stock_msg = f"📦 **NEW STOCK ADDED BY ADMIN**\n🔹 Category: `{category.upper()}`\n📈 Qty Added: `{added}` Accounts"
+        send_admin_noti(admin_stock_msg, file_path)
         os.remove(file_path)
 
-        # 2. Channel သို့ Noti ပို့ခြင်း
+        # 2. Public Channel သို့ Noti ပို့ခြင်း
         channel_noti = f"📦 **[NEW STOCK ADDED]**\n🔹 Category: `{category.upper()}`\n📈 Qty Added: `{added}` Accounts\n🛒 ဝယ်ယူလိုပါက အောက်ပါခလုတ်ကို နှိပ်ပါ -"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
@@ -237,19 +303,15 @@ def delete_acc(message):
             row_count = cursor.rowcount
             conn.commit()
             conn.close()
-            if row_count > 0:
-                bot.reply_to(message, f"🗑️ **ID #{target} ပါသော အကောင့်ကို ဖျက်လိုက်ပါပြီ။**")
-            else:
-                bot.reply_to(message, f"❌ ID #{target} မရှိပါ။")
+            if row_count > 0: bot.reply_to(message, f"🗑️ **ID #{target} ပါသော အကောင့်ကို ဖျက်လိုက်ပါပြီ။**")
+            else: bot.reply_to(message, f"❌ ID #{target} မရှိပါ။")
         elif mode_or_cat == "info":
             cursor.execute("DELETE FROM accounts WHERE account_info = %s", (target,))
             row_count = cursor.rowcount
             conn.commit()
             conn.close()
-            if row_count > 0:
-                bot.reply_to(message, f"🗑️ **အဆိုပါ အကောင့်ကို ဖျက်လိုက်ပါပြီ။**")
-            else:
-                bot.reply_to(message, f"❌ ထိုကဲ့သို့သော အကောင့် မရှိပါ။")
+            if row_count > 0: bot.reply_to(message, f"🗑️ **အဆိုပါ အကောင့်ကို ဖျက်လိုက်ပါပြီ။**")
+            else: bot.reply_to(message, f"❌ ထိုကဲ့သို့သော အကောင့် မရှိပါ။")
         else:
             conn.close()
             bot.reply_to(message, "⚠️ ပုံစံ မှားယွင်းနေပါသည်။")
@@ -269,8 +331,6 @@ def delete_acc(message):
 @bot.message_handler(commands=['stock', 'allstock', 'all stock'])
 def check_stock_admin(message):
     if message.from_user.id != ADMIN_ID: return
-    
-    # 1. Text ဖြင့် အနှစ်ချုပ် ပြပေးခြင်း
     x_count = get_stock_count('x')
     out_count = get_stock_count('outlook')
     conn = get_db()
@@ -279,7 +339,6 @@ def check_stock_admin(message):
     total_sold = cursor.fetchone()[0]
     bot.reply_to(message, f"📊 **Current Store Status**\n\n🔹 X Available: {x_count}\n🔹 Outlook Available: {out_count}\n🔸 Total Sold: {total_sold}", parse_mode="Markdown")
     
-    # 2. File ဖြင့် Stock အားလုံးကို Admin ဆီ ပို့ပေးခြင်း
     cursor.execute("SELECT id, category, account_info FROM accounts WHERE status = 'available'")
     rows = cursor.fetchall()
     conn.close()
@@ -290,9 +349,10 @@ def check_stock_admin(message):
             f.write("=== ALL AVAILABLE STOCK LIST ===\n\n")
             for r in rows:
                 f.write(f"ID: {r[0]} | Category: {r[1].upper()} | Account: {r[2]}\n")
-                
+        
+        # Command ရိုက်သည့် Admin Chat ဆီသို့သာ File ပို့မည်
         with open(file_path, "rb") as f:
-            bot.send_document(ADMIN_ID, f, caption=f"📦 **Available Stock List (Total: {len(rows)})**", parse_mode="Markdown")
+            bot.send_document(message.chat.id, f, caption=f"📦 **Available Stock List (Total: {len(rows)})**", parse_mode="Markdown")
         os.remove(file_path)
 
 @bot.message_handler(commands=['history'])
@@ -336,8 +396,9 @@ def show_all_history(message):
             f.write(f"Status: {r[6]} | Date: {r[7]}\n")
             f.write("-" * 50 + "\n")
             
+    # Command ရိုက်သည့် Admin Chat ဆီသို့သာ File ပို့မည်
     with open(file_path, "rb") as f:
-        bot.send_document(ADMIN_ID, f, caption="📜 **All Orders History File**", parse_mode="Markdown")
+        bot.send_document(message.chat.id, f, caption="📜 **All Orders History File**", parse_mode="Markdown")
     os.remove(file_path)
 
 @bot.message_handler(commands=['forcepay'])
@@ -371,9 +432,9 @@ def force_pay(message):
     if len(rows) >= qty:
         account_ids = tuple(r[0] for r in rows)
         accounts_info = [r[1] for r in rows]
-        now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         
-        cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s WHERE id IN %s", (user_id, now_str, account_ids))
+        # ⚠️ Forcepay logic: DB ထဲမှ အပြီးဖျက်ထုတ်လိုက်ပါသည် (နောင်တွင် /addacc ဖြင့် Format မပျက် ပြန်ထည့်နိုင်စေရန်)
+        cursor.execute("DELETE FROM accounts WHERE id IN %s", (account_ids,))
         cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
         conn.commit()
         
@@ -382,25 +443,32 @@ def force_pay(message):
             f"🎉 **Payment Successful / ငွေပေးချေမှု အောင်မြင်ပါသည်!**\n\n"
             f"📦 **Your Accounts / ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n"
             f"📌 **Note / သတိပေးချက်:**\n"
-            f"အကောင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းပြောင်းလဲ အသုံးပြုပါရန်။ ကျေးဇူးတင်ပါသည်။\n"
+            f"အကောင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းပြောင်းလဲ အသုံးပြုပါရန်။\n"
             f"Please change password and details immediately after receiving accounts. Thank you!"
         )
         
         try:
             bot.send_message(user_id, success_msg, parse_mode="Markdown")
-            bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။")
+            bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။ (Database မှ ဖယ်ထုတ်ပေးခဲ့၍ နောက်ပိုင်း ပြန် Add လို့ ရပါမည်)")
         except Exception as e:
             bot.reply_to(message, f"⚠️ User ထံ ပို့၍မရပါ: {e}")
             
-        # 1. Admin ဆီသို့ ရောင်းလိုက်သည့် အကောင့်များကို File ဖြင့်ပို့ပေးခြင်း
         file_path = f"sold_order_{order_id}.txt"
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(acc_text)
-        with open(file_path, "rb") as f:
-            bot.send_document(ADMIN_ID, f, caption=f"🛍️ **Force Pay Sale (Order #{order_id})**\nUser: `{user_id}`\nQty: `{qty}` {category.upper()}", parse_mode="Markdown")
+            
+        # Admin Channel သို့ Noti အပြည့်အစုံ File ပါတွဲပို့ခြင်း
+        force_admin_msg = f"""
+🛠 **ADMIN FORCEPAY ALERT**
+👤 **Buyer User ID:** `{user_id}`
+🆔 **Order ID:** `#{order_id}`
+📦 **Category:** `{category.upper()}` ({qty} accs)
+💰 **Amount Received:** `MANUAL`
+📍 **Address:** `ADMIN_FORCE_PAY`
+"""
+        send_admin_noti(force_admin_msg, file_path)
         os.remove(file_path)
 
-        # 2. Channel သို့ ဝယ်ယူမှု Noti ပို့ခြင်း
         channel_noti = f"🛍️ **[NEW PURCHASE SUCCESS]**\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n🪙 Paid Coin: `{coin.upper()}`"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
@@ -413,8 +481,15 @@ def force_pay(message):
         
     conn.close()
 
+# ==========================================
+# CALLBACK HANDLER (INLINE BUTTONS)
+# ==========================================
 @bot.callback_query_handler(func=lambda call: True)
 def handle_query(call):
+    if is_banned(call.from_user.id):
+        bot.answer_callback_query(call.id, "🚫 သင်သည် အသုံးပြုခွင့် ပိတ်ခံထားရပါသည်။", show_alert=True)
+        return
+
     if MAINTENANCE_MODE and call.from_user.id != ADMIN_ID:
         bot.answer_callback_query(call.id, "🛠️ စနစ် ပြုပြင်နေသဖြင့် ခေတ္တပိတ်ထားပါသည်ခင်ဗျာ။", show_alert=True)
         return
@@ -436,7 +511,7 @@ def handle_query(call):
             types.InlineKeyboardButton("🛒 X Accounts", callback_data=f"cat_x_{lang}"),
             types.InlineKeyboardButton("📧 Outlook Accounts", callback_data=f"cat_outlook_{lang}")
         )
-        markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/alphavalut"))
+        markup.add(types.InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}"))
         bot.edit_message_text(welcome_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
     elif data.startswith("cat_"):
@@ -582,6 +657,7 @@ def handle_query(call):
                 accounts_info = [r[1] for r in rows]
                 now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
                 
+                # ⚠️ တကယ့် Real Crypto Purchase ဖြစ်၍ DB တွင် 'sold' သို့ပြောင်းပြီး Block ထားမည် (ပြန် Add မရပါ)
                 cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s WHERE id IN %s", (user_id, now_str, account_ids))
                 cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
                 conn.commit()
@@ -591,7 +667,7 @@ def handle_query(call):
                     f"🎉 **Payment Successful / ငွေပေးချေမှု အောင်မြင်ပါသည်!**\n\n"
                     f"📦 **Your Accounts / ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n"
                     f"📌 **Note / သတိပေးချက်:**\n"
-                    f"အကောင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းပြောင်းလဲ အသုံးပြုပါရန်။ ကျေးဇူးတင်ပါသည်။\n"
+                    f"အကောင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းပြောင်းလဲ အသုံးပြုပါရန်။\n"
                     f"Please change password and details immediately after receiving accounts. Thank you!"
                 )
                 
@@ -601,15 +677,22 @@ def handle_query(call):
                 except Exception as e:
                     logging.error(f"User Message Failed: {e}")
                 
-                # 1. Admin ဆီသို့ ရောင်းလိုက်သည့် အကောင့်များကို File ဖြင့်ပို့ပေးခြင်း
                 file_path = f"sold_order_{order_id}.txt"
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(acc_text)
-                with open(file_path, "rb") as f:
-                    bot.send_document(ADMIN_ID, f, caption=f"🛍️ **New Sale (Order #{order_id})**\nUser: `{user_id}`\nQty: `{qty}` {category.upper()}", parse_mode="Markdown")
+                    
+                # Admin Noti Channel သို့ Noti အပြည့်အစုံ File ပါတွဲပို့ခြင်း
+                admin_msg = f"""
+🔔 **NEW PURCHASE ALERT**
+👤 **Buyer User ID:** `{user_id}`
+🆔 **Order ID:** `#{order_id}`
+📦 **Category:** `{category.upper()}` ({qty} accs)
+💰 **Amount Received:** `{amount_coin}` {coin.upper()}
+📍 **Address:** `{address}`
+"""
+                send_admin_noti(admin_msg, file_path)
                 os.remove(file_path)
 
-                # 2. Channel သို့ ဝယ်ယူမှု Noti ပို့ခြင်း
                 channel_noti = f"🛍️ **[NEW PURCHASE SUCCESS]**\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n🪙 Paid Coin: `{coin.upper()}`"
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
