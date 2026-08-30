@@ -178,35 +178,76 @@ def get_stock_count(category):
 
 
 def add_accounts_to_db(category, acc_list):
-    """Insert accounts without deleting anything and return inserted rows."""
+    """Insert new accounts or reactivate only forcepay-sold accounts.
+
+    Existing real-crypto sold accounts are never restored by this function.
+    """
     category = category.strip().lower()
     if category not in VALID_CATEGORIES:
         return 0, 0, []
 
-    # Remove repeated lines from the current command only. Existing database
-    # rows are preserved; ON CONFLICT simply reports them as duplicates.
     clean_accounts = list(dict.fromkeys(line.strip() for line in acc_list if line.strip()))
     if not clean_accounts:
         return 0, 0, []
 
-    inserted_accounts = []
+    added_accounts = []
+    duplicate_count = 0
     with get_db() as conn, conn.cursor() as cursor:
         for account_info in clean_accounts:
             cursor.execute(
                 """
-                INSERT INTO accounts (category, account_info)
-                VALUES (%s, %s)
-                ON CONFLICT (account_info) DO NOTHING
-                RETURNING account_info
+                SELECT id, category, status, order_id
+                  FROM accounts
+                 WHERE account_info = %s
+                FOR UPDATE
                 """,
-                (category, account_info),
+                (account_info,),
             )
-            row = cursor.fetchone()
-            if row:
-                inserted_accounts.append(row[0])
+            existing = cursor.fetchone()
 
-    added = len(inserted_accounts)
-    return added, len(clean_accounts) - added, inserted_accounts
+            if existing is None:
+                cursor.execute(
+                    """
+                    INSERT INTO accounts (category, account_info)
+                    VALUES (%s, %s)
+                    RETURNING account_info
+                    """,
+                    (category, account_info),
+                )
+                added_accounts.append(cursor.fetchone()[0])
+                continue
+
+            account_id, existing_category, status, linked_order_id = existing
+            payment_method = None
+            if linked_order_id is not None:
+                cursor.execute(
+                    "SELECT payment_method FROM orders WHERE order_id = %s",
+                    (linked_order_id,),
+                )
+                order_row = cursor.fetchone()
+                payment_method = order_row[0] if order_row else None
+
+            if (
+                existing_category == category
+                and status == 'sold'
+                and payment_method == 'forcepay'
+            ):
+                cursor.execute(
+                    """
+                    UPDATE accounts
+                       SET status = 'available', buyer_id = NULL,
+                           sold_at = NULL, order_id = NULL
+                     WHERE id = %s
+                    """,
+                    (account_id,),
+                )
+                added_accounts.append(account_info)
+            else:
+                # Available duplicates and real-crypto sold accounts are kept
+                # untouched and must not be reintroduced to stock.
+                duplicate_count += 1
+
+    return len(added_accounts), duplicate_count, added_accounts
 
 # ==========================================
 # COMMAND HANDLERS
@@ -309,7 +350,12 @@ def add_acc(message):
     acc_lines = [line.strip() for line in acc_data.split("\n") if line.strip()]
     
     added, dupes, inserted_accounts = add_accounts_to_db(category, acc_lines)
-    bot.reply_to(message, f"✅ **{category.upper()} Stock အသစ် {added} ကောင့် ထည့်သွင်းပြီးပါပြီ!**\n(Duplicates: {dupes})", parse_mode="Markdown")
+    bot.reply_to(
+        message,
+        f"✅ **{category.upper()} Stock အသစ်/ပြန်ထည့် {added} ကောင့် ပြီးပါပြီ!**\n"
+        f"(Duplicates / Real crypto sold: {dupes})",
+        parse_mode="Markdown",
+    )
     
     if added > 0:
         file_path = f"added_stock_{category}.txt"
