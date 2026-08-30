@@ -102,7 +102,6 @@ def is_banned(user_id):
     return res[0] if res else False
 
 def send_admin_noti(message_text, file_path=None):
-    """File ပါလျှင် Caption အနေဖြင့်တွဲပို့ပြီး၊ မပါလျှင် စာချည်းသက်သက်ပို့သော Admin Noti စနစ်"""
     try:
         if file_path and os.path.exists(file_path):
             with open(file_path, "rb") as f:
@@ -181,10 +180,6 @@ def get_stock_count(category):
         return int(cursor.fetchone()[0])
 
 def add_accounts_to_db(category, acc_list):
-    """Insert new accounts or reactivate only forcepay-sold accounts.
-
-    Existing real-crypto sold accounts are never restored by this function.
-    """
     category = category.strip().lower()
     if category not in VALID_CATEGORIES:
         return 0, 0, []
@@ -477,6 +472,9 @@ def show_all_history(message):
         bot.send_document(message.chat.id, f, caption="📜 **All Orders History File**", parse_mode="Markdown")
     os.remove(file_path)
 
+# ==========================================
+# FORCEPAY (Auto-Readd)
+# ==========================================
 @bot.message_handler(commands=['forcepay'])
 def force_pay(message):
     if message.from_user.id != ADMIN_ID: return
@@ -514,8 +512,10 @@ def force_pay(message):
         accounts_info = [r[1] for r in rows]
 
         now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # ✅ FIX: Forcepay လုပ်တာနဲ့ အကောင့်တွေ ပြန်ဝင်သွားမယ်
         cursor.execute(
-            "UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, "
+            "UPDATE accounts SET status = 'available', buyer_id = %s, sold_at = %s, "
             "order_id = %s, forcepay_test = TRUE WHERE id IN %s",
             (user_id, now_str, order_id, account_ids),
         )
@@ -536,7 +536,7 @@ def force_pay(message):
         
         try:
             bot.send_message(user_id, success_msg, parse_mode="Markdown")
-            bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။\n🧪 စမ်းသပ် order ဖြစ်သောကြောင့် `/readdforce {order_id}` ဖြင့် account များကို ပြန်ထည့်နိုင်ပါသည်။\n🔒 Real crypto order များကို ပြန်ထည့်ခွင့်မရှိပါ။")
+            bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။\n♻️ အကောင့်များကို Stock ထဲသို့ အလိုအလျောက် ပြန်ထည့်ပေးလိုက်ပါပြီ။")
         except Exception as e:
             bot.reply_to(message, f"⚠️ User ထံ ပို့၍မရပါ: {e}")
             
@@ -566,49 +566,6 @@ def force_pay(message):
         bot.reply_to(message, f"❌ Stock မလုံလောက်ပါ (လိုအပ်ချက်: {qty})")
         
     conn.close()
-
-@bot.message_handler(commands=['readdforce'])
-def readd_forcepay_accounts(message):
-    """Admin-only: return accounts sold by one forcepay order to available stock."""
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    parts = message.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        bot.reply_to(message, "⚠️ အသုံးပြုပုံ: `/readdforce <order_id>`", parse_mode="Markdown")
-        return
-
-    order_id = int(parts[1])
-    with get_db() as conn, conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT status, payment_method FROM orders WHERE order_id = %s FOR UPDATE",
-            (order_id,),
-        )
-        order = cursor.fetchone()
-        if not order:
-            bot.reply_to(message, f"❌ Order #{order_id} မရှိပါ။")
-            return
-        status, payment_method = order
-        if status != 'completed' or payment_method != 'forcepay':
-            bot.reply_to(message, "⚠️ ဒီ Order သည် admin forcepay order မဟုတ်ပါ၊ သို့မဟုတ် ပြီးစီးပြီးသား flow မဟုတ်ပါ။")
-            return
-
-        # FIX: forcepay_test ကို TRUE ရော FALSE ရော နှစ်မျိုးလုံး ပြန်ထည့်နိုင်အောင် ပြင်ထားတယ်
-        cursor.execute(
-            """
-            UPDATE accounts
-               SET status = 'available', buyer_id = NULL, sold_at = NULL,
-                   order_id = NULL, forcepay_test = TRUE
-             WHERE order_id = %s AND status = 'sold' AND forcepay_test IN (TRUE, FALSE)
-            """,
-            (order_id,),
-        )
-        restored = cursor.rowcount
-
-    bot.reply_to(
-        message,
-        f"♻️ Forcepay Order #{order_id} မှ account {restored} ခုကို Available stock သို့ ပြန်ထည့်ပြီးပါပြီ။",
-    )
 
 # ==========================================
 # CALLBACK HANDLER (INLINE BUTTONS)
