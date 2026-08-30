@@ -8,7 +8,6 @@ import psycopg2
 from psycopg2 import IntegrityError
 from bip_utils import Bip39SeedGenerator, Bip44, Bip44Coins, Bip44Changes
 
-# --- Environment Variables ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 MNEMONIC = os.getenv("MASTER_MNEMONIC")
@@ -20,7 +19,6 @@ MAINTENANCE_MODE = False
 logging.basicConfig(level=logging.INFO)
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- Database Connection & Setup (PostgreSQL) ---
 def get_db():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
@@ -60,34 +58,24 @@ def init_db():
 
 init_db()
 
-# --- Crypto & Blockchain Functions (မူရင်းအတိုင်း အပြည့်အစုံ) ---
 def generate_hd_address(coin: str, index: int) -> str:
     seed_bytes = Bip39SeedGenerator(MNEMONIC).Generate()
     if coin == "sol":
         bip_mst = Bip44.FromSeed(seed_bytes, Bip44Coins.SOLANA)
-        bip_nat = bip_mst.Purpose().Coin().Account(index).PublicKey().ToAddress()
-        return bip_nat
+        return bip_mst.Purpose().Coin().Account(index).PublicKey().ToAddress()
     elif coin == "pol":
         bip_mst = Bip44.FromSeed(seed_bytes, Bip44Coins.POLYGON)
-        bip_nat = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
-        return bip_nat
+        return bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
     elif coin == "bnb":
         bip_mst = Bip44.FromSeed(seed_bytes, Bip44Coins.BINANCE_SMART_CHAIN)
-        bip_nat = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
-        return bip_nat
+        return bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
     elif coin == "trx":
         bip_mst = Bip44.FromSeed(seed_bytes, Bip44Coins.TRON)
-        bip_nat = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
-        return bip_nat
+        return bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
     return None
 
 def get_crypto_amount(usd_amount: float, coin: str) -> float:
-    coin_ids = {
-        "sol": "solana",
-        "pol": "polygon-ecosystem-token",
-        "bnb": "binancecoin",
-        "trx": "tron"
-    }
+    coin_ids = {"sol": "solana", "pol": "polygon-ecosystem-token", "bnb": "binancecoin", "trx": "tron"}
     try:
         url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_ids[coin]}&vs_currencies=usd"
         res = requests.get(url, timeout=10).json()
@@ -108,14 +96,12 @@ def check_blockchain_balance(address: str, coin: str) -> float:
             url = "https://polygon-bor-rpc.publicnode.com"
             payload = {"jsonrpc": "2.0", "method": "eth_getBalance", "params": [address, "latest"], "id": 1}
             res = requests.post(url, json=payload, timeout=10).json()
-            hex_bal = res.get('result', '0x0')
-            return int(hex_bal, 16) / 1e18
+            return int(res.get('result', '0x0'), 16) / 1e18
         elif coin == "bnb":
             url = "https://bsc-rpc.publicnode.com"
             payload = {"jsonrpc": "2.0", "method": "eth_getBalance", "params": [address, "latest"], "id": 1}
             res = requests.post(url, json=payload, timeout=10).json()
-            hex_bal = res.get('result', '0x0')
-            return int(hex_bal, 16) / 1e18
+            return int(res.get('result', '0x0'), 16) / 1e18
         elif coin == "trx":
             url = f"https://api.trongrid.io/v1/accounts/{address}"
             res = requests.get(url, timeout=10).json()
@@ -126,7 +112,6 @@ def check_blockchain_balance(address: str, coin: str) -> float:
         logging.error(f"Blockchain Check Error ({coin}): {e}")
         return 0.0
 
-# --- Admin Data Entry Helpers ---
 def get_stock_count(category):
     conn = get_db()
     cursor = conn.cursor()
@@ -152,7 +137,6 @@ def add_accounts_to_db(category, acc_list):
     conn.close()
     return added, duplicates
 
-# --- USER COMMANDS ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     if MAINTENANCE_MODE and message.from_user.id != ADMIN_ID:
@@ -173,12 +157,10 @@ def send_welcome(message):
     )
     bot.send_message(message.chat.id, "🌐 **Please select your language**", reply_markup=markup, parse_mode="Markdown")
 
-# --- ADMIN NEW FEATURES (Maintenance, Export, Reset) ---
 @bot.message_handler(commands=['on', 'off'])
 def toggle_maintenance(message):
     global MAINTENANCE_MODE
     if message.from_user.id != ADMIN_ID: return
-    
     if message.text == '/off':
         MAINTENANCE_MODE = True
         bot.reply_to(message, "⛔️ **Maintenance Mode ဖွင့်လိုက်ပါပြီ။** User များ သုံး၍မရတော့ပါ။")
@@ -220,7 +202,6 @@ def reset_sold_accounts(message):
     conn.close()
     bot.reply_to(message, f"🔄 **{reset_count}** ကောင့်ကို ရောင်းရန် (Available) အဖြစ် ပြန်ပြောင်းပေးလိုက်ပါပြီ။", parse_mode="Markdown")
 
-# --- ADMIN COMMANDS ---
 @bot.message_handler(commands=['addacc'])
 def add_acc(message):
     if message.from_user.id != ADMIN_ID: return
@@ -241,7 +222,56 @@ def check_stock_admin(message):
     out_count = get_stock_count('outlook')
     bot.reply_to(message, f"📊 **Current Store Status**\n\n🔹 X Available: {x_count}\n🔹 Outlook Available: {out_count}", parse_mode="Markdown")
 
-# --- PAYMENT & QUERY HANDLER ---
+@bot.message_handler(commands=['forcepay'])
+def force_pay(message):
+    if message.from_user.id != ADMIN_ID: return
+    parts = message.text.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        bot.reply_to(message, "⚠️ အသုံးပြုပုံ: `/forcepay <order_id>`", parse_mode="Markdown")
+        return
+
+    order_id = int(parts[1])
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, category, qty, status FROM orders WHERE order_id = %s", (order_id,))
+    order = cursor.fetchone()
+    
+    if not order:
+        bot.reply_to(message, "❌ မရှိသော Order ID ဖြစ်နေသည်။")
+        conn.close()
+        return
+
+    user_id, category, qty, status = order
+    if status == 'completed':
+        bot.reply_to(message, "⚠️ ဒီ Order သည် အကောင့်ထုတ်ပေးပြီးသား ဖြစ်နေပါပြီ။")
+        conn.close()
+        return
+
+    cursor.execute("SELECT id, account_info FROM accounts WHERE category = %s AND status = 'available' LIMIT %s", (category, qty))
+    rows = cursor.fetchall()
+    
+    if len(rows) >= qty:
+        account_ids = tuple(r[0] for r in rows)
+        accounts_info = [r[1] for r in rows]
+        now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        
+        cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s WHERE id IN %s", (user_id, now_str, account_ids))
+        cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
+        conn.commit()
+        
+        acc_text = "\n".join(accounts_info)
+        success_msg = f"🎉 **[Admin Bypass] Payment Successful!**\n\n📦 **Your Accounts / ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n🙏 Thank you for your purchase!"
+        
+        try:
+            bot.send_message(user_id, success_msg, parse_mode="Markdown")
+            bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။")
+        except Exception as e:
+            bot.reply_to(message, f"⚠️ User ထံ ပို့၍မရပါ: {e}")
+    else:
+        bot.reply_to(message, f"❌ Stock မလုံလောက်ပါ (လိုအပ်ချက်: {qty})")
+        
+    conn.close()
+
 @bot.callback_query_handler(func=lambda call: True)
 def handle_query(call):
     if MAINTENANCE_MODE and call.from_user.id != ADMIN_ID:
@@ -352,8 +382,8 @@ def handle_query(call):
                   f"🆔 **Order ID:** `#{order_id}`\n" \
                   f"🪙 **Coin:** `{coin.upper()}`\n" \
                   f"💵 **Total Value:** `${usd_total}` USD\n" \
-                  f"⚠️ **EXACT AMOUNT TO SEND (တိကျသော ပမာဏ):**\n`{coin_amount}` `{coin.upper()}`\n\n" \
-                  f"📍 **DEPOSIT ADDRESS (လွှဲရမည့် လိပ်စာ):**\n`{address}`\n\n" \
+                  f"⚠️ **EXACT AMOUNT TO SEND:**\n`{coin_amount}` `{coin.upper()}`\n\n" \
+                  f"📍 **DEPOSIT ADDRESS:**\n`{address}`\n\n" \
                   f"⏱️ **ငွေလွှဲရန် အချိန်ကန့်သတ်ချက်:** `15 မိနစ်`\n" \
                   f"📌 **Network Fee ပိုလွှဲစရာ မလိုပါ (`{coin_amount}` အတိအကျလွှဲပါ)"
         else:
