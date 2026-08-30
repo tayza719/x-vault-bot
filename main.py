@@ -3,6 +3,7 @@ import logging
 import datetime
 import requests
 import telebot
+from telebot import types
 import psycopg2
 from psycopg2 import IntegrityError
 from bip_utils import Bip39SeedGenerator, Bip44, Bip44Coins, Bip44Changes
@@ -12,7 +13,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 MNEMONIC = os.getenv("MNEMONIC")
 DATABASE_URL = os.getenv("DATABASE_URL")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@alphavalut")
-ADMIN_CHANNEL_ID = -1004306575654  # Admin Channel ID အသစ်
+ADMIN_CHANNEL_ID = -1004306575654  # <-- Feature အသစ်: Admin Channel ID
 BOT_USERNAME = "SocialXStoreBot"
 
 PRICES = {"x": 0.15, "outlook": 0.10}
@@ -21,7 +22,7 @@ MAINTENANCE_MODE = False
 logging.basicConfig(level=logging.INFO)
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- Admin Channel သို့ Noti နဲ့ File ပို့ရန် Function ---
+# --- Feature အသစ်: Admin Channel သို့ Noti နဲ့ File ပို့ရန် Function ---
 def send_admin_noti(message_text, file_path=None):
     """Admin Channel ကို Noti နဲ့ File ပို့တယ်"""
     try:
@@ -225,7 +226,7 @@ def add_acc(message):
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}"))
         try:
-            bot.send_message(ADMIN_CHANNEL_ID, channel_noti, reply_markup=markup, parse_mode="Markdown")
+            bot.send_message(CHANNEL_ID, channel_noti, reply_markup=markup, parse_mode="Markdown")
         except Exception as e:
             logging.error(f"Channel Stock Noti Failed: {e}")
 
@@ -374,7 +375,7 @@ def force_pay(message):
         bot.send_document(ADMIN_ID, f, caption=f"📂 Force Pay Sale Order #{order_id}")
     os.remove(file_path)
 
-    # Admin Channel သို့ Noti ပို့ခြင်း (User ပြထားသည့် ပုံစံအတိုင်း Exact Format)
+    # --- Feature အသစ်: Admin Channel သို့ Alert ပို့ခြင်း ---
     admin_msg = f"""
 🚨 NEW PURCHASE ALERT
 📊 User: {user_id}
@@ -560,7 +561,7 @@ def handle_query(call):
                     bot.send_document(ADMIN_ID, f, caption=f"📂 **New Sale Order #{order_id}**", parse_mode="Markdown")
                 os.remove(file_path)
 
-                # Admin Channel သို့ Noti ပို့ခြင်း (User ပြထားသည့် ပုံစံအတိုင်း Exact Format)
+                # --- Feature အသစ်: Admin Channel သို့ Alert ပို့ခြင်း ---
                 admin_msg = f"""
 🚨 NEW PURCHASE ALERT
 📊 User: {user_id}
@@ -568,7 +569,7 @@ def handle_query(call):
 💰 Amount: {amount_coin} {coin.upper()}
 📍 Address: {address}
 """
-                send_admin_noti(admin_msg, file_path=None)
+                send_admin_noti(admin_msg)
             else:
                 bot.answer_callback_query(call.id, "❌ Stock မလုံလောက်တော့ပါ။ (ကျေးဇူးပြု၍ Admin ကို ဆက်သွယ်ပါ)", show_alert=True)
         else:
