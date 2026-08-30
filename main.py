@@ -13,6 +13,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 MNEMONIC = os.getenv("MASTER_MNEMONIC")
 DATABASE_URL = os.getenv("DATABASE_URL")
 CHANNEL_ID = "@alphavalut"
+BOT_USERNAME = "SocialXStoreBot"  # 🤖 Bot Username (앞 @ မပါဘဲ)
 
 PRICES = {"x": 0.15, "outlook": 0.10}
 MAINTENANCE_MODE = False
@@ -200,9 +201,11 @@ def add_acc(message):
     bot.reply_to(message, f"✅ **{category.upper()} Stock အသစ် {added} ကောင့် ထည့်သွင်းပြီးပါပြီ!**\n(Duplicates: {dupes})", parse_mode="Markdown")
     
     if added > 0:
-        channel_noti = f"📦 **[NEW STOCK ADDED]**\n🔹 Category: `{category.upper()}`\n📈 Qty Added: `{added}` Accounts\n🛒 ဝယ်ယူလိုပါက Bot ထဲတွင် လာရောက်ဝယ်ယူနိုင်ပါပြီ။"
+        channel_noti = f"📦 **[NEW STOCK ADDED]**\n🔹 Category: `{category.upper()}`\n📈 Qty Added: `{added}` Accounts\n🛒 ဝယ်ယူလိုပါက အောက်ပါခလုတ်ကို နှိပ်ပါ -"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
         try:
-            bot.send_message(CHANNEL_ID, channel_noti, parse_mode="Markdown")
+            bot.send_message(CHANNEL_ID, channel_noti, reply_markup=markup, parse_mode="Markdown")
         except Exception as e:
             logging.error(f"Channel Stock Noti Failed: {e}")
 
@@ -242,7 +245,6 @@ def delete_acc(message):
             conn.close()
             bot.reply_to(message, "⚠️ ပုံစံ မှားယွင်းနေပါသည်။")
     else:
-        # ဥပမာ: /delacc x 2
         category = mode_or_cat
         if parts[2].isdigit():
             qty = int(parts[2])
@@ -253,7 +255,7 @@ def delete_acc(message):
             bot.reply_to(message, f"🗑️ **{category.upper()} Stock ထဲမှ အကောင့် {row_count} ကောင့်ကို ဖျက်လိုက်ပါပြီ။**", parse_mode="Markdown")
         else:
             conn.close()
-            bot.reply_to(message, "⚠️ အရေအတွက် ထည့်ရန် မမှန်ကန်ပါ။ (ဥပမာ: `/delacc x 2`)", parse_mode="Markdown")
+            bot.reply_to(message, "⚠️ အရေအတွက် ထည့်ရန် မှန်ကန်မှု မရှိပါ။", parse_mode="Markdown")
 
 @bot.message_handler(commands=['stock', 'all stock', 'allstock'])
 def check_stock_admin(message):
@@ -386,10 +388,12 @@ def force_pay(message):
         except Exception as e:
             bot.reply_to(message, f"⚠️ User ထံ ပို့၍မရပါ: {e}")
             
-        # 📢 Channel သို့ ဝယ်ယူမှု Notification ပို့ရန် (Force Pay ဖြစ်စေ, ပုံမှန်ဝယ်သည်ဖြစ်စေ အမြဲပြမည်)
+        # 📢 Channel သို့ ဝယ်ယူမှု Notification ပို့ရန် (Bot Button ပါဝင်သည်)
         channel_noti = f"🛍️ **[NEW PURCHASE SUCCESS]**\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n🪙 Paid Coin: `{coin.upper()}`"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
         try:
-            bot.send_message(CHANNEL_ID, channel_noti, parse_mode="Markdown")
+            bot.send_message(CHANNEL_ID, channel_noti, reply_markup=markup, parse_mode="Markdown")
         except Exception as e:
             logging.error(f"Channel Purchase Noti Failed: {e}")
     else:
@@ -585,10 +589,12 @@ def handle_query(call):
                 except Exception as e:
                     logging.error(f"User Message Failed: {e}")
                 
-                # 📢 Channel သို့ ဝယ်ယူမှု Notification ပို့ရန်
+                # 📢 Channel သို့ ဝယ်ယူမှု Notification ပို့ရန် (Bot Button ပါဝင်သည်)
                 channel_noti = f"🛍️ **[NEW PURCHASE SUCCESS]**\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n🪙 Paid Coin: `{coin.upper()}`"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
                 try:
-                    bot.send_message(CHANNEL_ID, channel_noti, parse_mode="Markdown")
+                    bot.send_message(CHANNEL_ID, channel_noti, reply_markup=markup, parse_mode="Markdown")
                 except Exception as e:
                     logging.error(f"Channel Purchase Noti Failed: {e}")
             else:
