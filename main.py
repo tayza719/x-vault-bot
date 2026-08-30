@@ -13,7 +13,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 ADMIN_CHANNEL_ID = -1004306575654  # Admin Private Noti Channel
 MNEMONIC = os.getenv("MASTER_MNEMONIC")
 DATABASE_URL = os.getenv("DATABASE_URL")
-CHANNEL_ID = "@alphavalut" # Public Channel
+CHANNEL_ID = "@alphavalut"  # Public Channel
 BOT_USERNAME = "SocialXStoreBot"
 
 PRICES = {"x": 0.15, "outlook": 0.10}
@@ -68,7 +68,6 @@ def init_db():
         )
     ''')
     
-    # Small, idempotent migrations for databases created by older versions.
     cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='is_banned'")
     if not cursor.fetchone():
         cursor.execute("ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT FALSE")
@@ -181,7 +180,6 @@ def get_stock_count(category):
         )
         return int(cursor.fetchone()[0])
 
-
 def add_accounts_to_db(category, acc_list):
     """Insert new accounts or reactivate only forcepay-sold accounts.
 
@@ -241,8 +239,6 @@ def add_accounts_to_db(category, acc_list):
                 )
                 added_accounts.append(account_info)
             else:
-                # Available duplicates and real-crypto sold accounts are kept
-                # untouched and must not be reintroduced to stock.
                 duplicate_count += 1
 
     return len(added_accounts), duplicate_count, added_accounts
@@ -314,8 +310,6 @@ def reset_sold_accounts(message):
     if message.from_user.id != ADMIN_ID: return
     conn = get_db()
     cursor = conn.cursor()
-    # Only accounts sold through admin forcepay may be restored. Real crypto
-    # purchases remain permanently sold and are excluded from this reset.
     cursor.execute(
         """
         UPDATE accounts
@@ -356,12 +350,10 @@ def add_acc(message):
         with open(file_path, "w", encoding="utf-8") as f:
             f.write("\n".join(inserted_accounts))
         
-        # 1. Admin Noti Channel သို့ File အပါ Noti ပို့ခြင်း
         admin_stock_msg = f"📦 **NEW STOCK ADDED BY ADMIN**\n🔹 Category: `{category.upper()}`\n📈 Qty Added: `{added}` Accounts"
         send_admin_noti(admin_stock_msg, file_path)
         os.remove(file_path)
 
-        # 2. Public Channel သို့ Noti ပို့ခြင်း
         channel_noti = f"📦 **[NEW STOCK ADDED]**\n🔹 Category: `{category.upper()}`\n📈 Qty Added: `{added}` Accounts\n🛒 ဝယ်ယူလိုပါက အောက်ပါခလုတ်ကို နှိပ်ပါ -"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
@@ -436,7 +428,6 @@ def check_stock_admin(message):
             for r in rows:
                 f.write(f"ID: {r[0]} | Category: {r[1].upper()} | Account: {r[2]}\n")
         
-        # Command ရိုက်သည့် Admin Chat ဆီသို့သာ File ပို့မည်
         with open(file_path, "rb") as f:
             bot.send_document(message.chat.id, f, caption=f"📦 **Available Stock List (Total: {len(rows)})**", parse_mode="Markdown")
         os.remove(file_path)
@@ -482,7 +473,6 @@ def show_all_history(message):
             f.write(f"Status: {r[6]} | Date: {r[7]}\n")
             f.write("-" * 50 + "\n")
             
-    # Command ရိုက်သည့် Admin Chat ဆီသို့သာ File ပို့မည်
     with open(file_path, "rb") as f:
         bot.send_document(message.chat.id, f, caption="📜 **All Orders History File**", parse_mode="Markdown")
     os.remove(file_path)
@@ -523,7 +513,6 @@ def force_pay(message):
         account_ids = tuple(r[0] for r in rows)
         accounts_info = [r[1] for r in rows]
 
-        # Keep the rows so an admin can safely re-add this specific forcepay order.
         now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, "
@@ -555,7 +544,6 @@ def force_pay(message):
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(acc_text)
             
-        # Admin Channel သို့ Noti အပြည့်အစုံ File ပါတွဲပို့ခြင်း
         force_admin_msg = f"""
 🛠 **ADMIN FORCEPAY ALERT**
 👤 **Buyer User ID:** `{user_id}`
@@ -578,7 +566,6 @@ def force_pay(message):
         bot.reply_to(message, f"❌ Stock မလုံလောက်ပါ (လိုအပ်ချက်: {qty})")
         
     conn.close()
-
 
 @bot.message_handler(commands=['readdforce'])
 def readd_forcepay_accounts(message):
@@ -606,12 +593,13 @@ def readd_forcepay_accounts(message):
             bot.reply_to(message, "⚠️ ဒီ Order သည် admin forcepay order မဟုတ်ပါ၊ သို့မဟုတ် ပြီးစီးပြီးသား flow မဟုတ်ပါ။")
             return
 
+        # FIX: forcepay_test ကို TRUE ရော FALSE ရော နှစ်မျိုးလုံး ပြန်ထည့်နိုင်အောင် ပြင်ထားတယ်
         cursor.execute(
             """
             UPDATE accounts
                SET status = 'available', buyer_id = NULL, sold_at = NULL,
                    order_id = NULL, forcepay_test = TRUE
-             WHERE order_id = %s AND status = 'sold' AND forcepay_test = TRUE
+             WHERE order_id = %s AND status = 'sold' AND forcepay_test IN (TRUE, FALSE)
             """,
             (order_id,),
         )
@@ -717,8 +705,6 @@ def handle_query(call):
             
         created_time = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            # Keep order creation atomic: never expose a pending order without
-            # a valid deposit address.
             with get_db() as conn, conn.cursor() as cursor:
                 cursor.execute(
                     "INSERT INTO orders (user_id, category, qty, coin, address, amount_coin, status, created_at) "
@@ -810,7 +796,6 @@ def handle_query(call):
                 accounts_info = [r[1] for r in rows]
                 now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
                 
-                # Real crypto purchase: mark as sold. Rows remain in the database for audit/history.
                 cursor.execute(
                     "UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, "
                     "order_id = %s, forcepay_test = FALSE WHERE id IN %s",
@@ -838,7 +823,6 @@ def handle_query(call):
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(acc_text)
                     
-                # Admin Noti Channel သို့ Noti အပြည့်အစုံ File ပါတွဲပို့ခြင်း
                 admin_msg = f"""
 🔔 **NEW PURCHASE ALERT**
 👤 **Buyer User ID:** `{user_id}`
