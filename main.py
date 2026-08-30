@@ -178,30 +178,35 @@ def get_stock_count(category):
 
 
 def add_accounts_to_db(category, acc_list):
-    """Insert accounts atomically and count only rows actually inserted.
-
-    ON CONFLICT avoids rolling back earlier successful inserts when one line is
-    a duplicate, which was the main reason the displayed count could be wrong.
-    """
+    """Insert accounts without deleting anything and return inserted rows."""
     category = category.strip().lower()
     if category not in VALID_CATEGORIES:
-        return 0, 0
+        return 0, 0, []
 
+    # Remove repeated lines from the current command only. Existing database
+    # rows are preserved; ON CONFLICT simply reports them as duplicates.
     clean_accounts = list(dict.fromkeys(line.strip() for line in acc_list if line.strip()))
     if not clean_accounts:
-        return 0, 0
+        return 0, 0, []
 
+    inserted_accounts = []
     with get_db() as conn, conn.cursor() as cursor:
-        cursor.executemany(
-            """
-            INSERT INTO accounts (category, account_info)
-            VALUES (%s, %s)
-            ON CONFLICT (account_info) DO NOTHING
-            """,
-            [(category, account_info) for account_info in clean_accounts],
-        )
-        added = cursor.rowcount
-    return int(added), len(clean_accounts) - int(added)
+        for account_info in clean_accounts:
+            cursor.execute(
+                """
+                INSERT INTO accounts (category, account_info)
+                VALUES (%s, %s)
+                ON CONFLICT (account_info) DO NOTHING
+                RETURNING account_info
+                """,
+                (category, account_info),
+            )
+            row = cursor.fetchone()
+            if row:
+                inserted_accounts.append(row[0])
+
+    added = len(inserted_accounts)
+    return added, len(clean_accounts) - added, inserted_accounts
 
 # ==========================================
 # COMMAND HANDLERS
@@ -270,11 +275,24 @@ def reset_sold_accounts(message):
     if message.from_user.id != ADMIN_ID: return
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("UPDATE accounts SET status = 'available', buyer_id = NULL, sold_at = NULL WHERE status = 'sold'")
+    # Only accounts sold through admin forcepay may be restored. Real crypto
+    # purchases remain permanently sold and are excluded from this reset.
+    cursor.execute(
+        """
+        UPDATE accounts
+           SET status = 'available', buyer_id = NULL, sold_at = NULL, order_id = NULL
+         WHERE status = 'sold'
+           AND order_id IN (
+               SELECT order_id
+                 FROM orders
+                WHERE status = 'completed' AND payment_method = 'forcepay'
+           )
+        """
+    )
     reset_count = cursor.rowcount
     conn.commit()
     conn.close()
-    bot.reply_to(message, f"🔄 **{reset_count}** ကောင့်ကို ရောင်းရန် (Available) အဖြစ် ပြန်ပြောင်းပေးလိုက်ပါပြီ။", parse_mode="Markdown")
+    bot.reply_to(message, f"🔄 Forcepay စမ်းသပ် order များထဲမှ **{reset_count}** ကောင့်ကိုသာ Available အဖြစ် ပြန်ပြောင်းပေးလိုက်ပါပြီ။\nReal crypto ဖြင့် ရောင်းပြီးသား account များကို မပြောင်းပါ။", parse_mode="Markdown")
 
 @bot.message_handler(commands=['addacc'])
 def add_acc(message):
@@ -290,13 +308,13 @@ def add_acc(message):
     acc_data = parts[1].strip()
     acc_lines = [line.strip() for line in acc_data.split("\n") if line.strip()]
     
-    added, dupes = add_accounts_to_db(category, acc_lines)
+    added, dupes, inserted_accounts = add_accounts_to_db(category, acc_lines)
     bot.reply_to(message, f"✅ **{category.upper()} Stock အသစ် {added} ကောင့် ထည့်သွင်းပြီးပါပြီ!**\n(Duplicates: {dupes})", parse_mode="Markdown")
     
     if added > 0:
         file_path = f"added_stock_{category}.txt"
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(acc_lines))
+            f.write("\n".join(inserted_accounts))
         
         # 1. Admin Noti Channel သို့ File အပါ Noti ပို့ခြင်း
         admin_stock_msg = f"📦 **NEW STOCK ADDED BY ADMIN**\n🔹 Category: `{category.upper()}`\n📈 Qty Added: `{added}` Accounts"
@@ -440,7 +458,11 @@ def force_pay(message):
     order_id = int(parts[1])
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, category, qty, coin, amount_coin, status FROM orders WHERE order_id = %s", (order_id,))
+    cursor.execute(
+        "SELECT user_id, category, qty, coin, amount_coin, status "
+        "FROM orders WHERE order_id = %s FOR UPDATE",
+        (order_id,),
+    )
     order = cursor.fetchone()
     
     if not order:
@@ -484,7 +506,7 @@ def force_pay(message):
         
         try:
             bot.send_message(user_id, success_msg, parse_mode="Markdown")
-            bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။ (Database မှ ဖယ်ထုတ်ပေးခဲ့၍ နောက်ပိုင်း ပြန် Add လို့ ရပါမည်)")
+            bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။\n🧪 စမ်းသပ် order ဖြစ်သောကြောင့် `/readdforce {order_id}` ဖြင့် account များကို ပြန်ထည့်နိုင်ပါသည်။\n🔒 Real crypto order များကို ပြန်ထည့်ခွင့်မရှိပါ။")
         except Exception as e:
             bot.reply_to(message, f"⚠️ User ထံ ပို့၍မရပါ: {e}")
             
@@ -699,7 +721,11 @@ def handle_query(call):
         
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT user_id, category, qty, coin, address, amount_coin, status, created_at FROM orders WHERE order_id = %s", (order_id,))
+        cursor.execute(
+            "SELECT user_id, category, qty, coin, address, amount_coin, status, created_at "
+            "FROM orders WHERE order_id = %s FOR UPDATE",
+            (order_id,),
+        )
         order = cursor.fetchone()
         
         if not order:
@@ -734,7 +760,7 @@ def handle_query(call):
                 accounts_info = [r[1] for r in rows]
                 now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
                 
-                # ⚠️ တကယ့် Real Crypto Purchase ဖြစ်၍ DB တွင် 'sold' သို့ပြောင်းပြီး Block ထားမည် (ပြန် Add မရပါ)
+                # Real crypto purchase: mark as sold. Rows remain in the database for audit/history.
                 cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s", (user_id, now_str, order_id, account_ids))
                 cursor.execute("UPDATE orders SET status = 'completed', payment_method = 'crypto' WHERE order_id = %s", (order_id,))
                 conn.commit()
