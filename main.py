@@ -12,7 +12,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 MNEMONIC = os.getenv("MASTER_MNEMONIC")
 DATABASE_URL = os.getenv("DATABASE_URL")
-CHANNEL_ID = "@alphavalut"  # 📢 Channel Username သို့မဟုတ် ID
+CHANNEL_ID = "@alphavalut"
 
 PRICES = {"x": 0.15, "outlook": 0.10}
 MAINTENANCE_MODE = False
@@ -199,7 +199,6 @@ def add_acc(message):
     added, dupes = add_accounts_to_db(category, acc_lines)
     bot.reply_to(message, f"✅ **{category.upper()} Stock အသစ် {added} ကောင့် ထည့်သွင်းပြီးပါပြီ!**\n(Duplicates: {dupes})", parse_mode="Markdown")
     
-    # 📢 Channel သို့ Stock အသစ်ဖြည့်ထားကြောင်း အကြောင်းကြားရန်
     if added > 0:
         channel_noti = f"📦 **[NEW STOCK ADDED]**\n🔹 Category: `{category.upper()}`\n📈 Qty Added: `{added}` Accounts\n🛒 ဝယ်ယူလိုပါက Bot ထဲတွင် လာရောက်ဝယ်ယူနိုင်ပါပြီ။"
         try:
@@ -210,73 +209,85 @@ def add_acc(message):
 @bot.message_handler(commands=['delacc'])
 def delete_acc(message):
     if message.from_user.id != ADMIN_ID: return
-    parts = message.text.split(maxsplit=2)
+    parts = message.text.split()
     if len(parts) < 3:
-        bot.reply_to(message, "⚠️ အသုံးပြုပုံ:\n• ID ဖြင့်ဖျက်ရန်: `/delacc id <account_id>`\n• စာသားဖြင့်ဖျက်ရန်: `/delacc info <account_info>`", parse_mode="Markdown")
+        bot.reply_to(message, "⚠️ အသုံးပြုပုံ:\n• အရေအတွက်ဖြင့် ဖျက်ရန်: `/delacc x 2`\n• ID ဖြင့်ဖျက်ရန်: `/delacc id 5`\n• စာသားဖြင့်ဖျက်ရန်: `/delacc info <text>`", parse_mode="Markdown")
         return
         
-    mode = parts[1].lower()
-    target = parts[2].strip()
-    
+    mode_or_cat = parts[1].lower()
     conn = get_db()
     cursor = conn.cursor()
     
-    if mode == "id" and target.isdigit():
-        cursor.execute("DELETE FROM accounts WHERE id = %s", (int(target),))
-        row_count = cursor.rowcount
-        conn.commit()
-        conn.close()
-        if row_count > 0:
-            bot.reply_to(message, f"🗑️ **ID #{target} ပါသော အကောင့်ကို အောင်မြင်စွာ ဖျက်လိုက်ပါပြီ။**", parse_mode="Markdown")
+    if mode_or_cat in ["id", "info"]:
+        target = parts[2].strip()
+        if mode_or_cat == "id" and target.isdigit():
+            cursor.execute("DELETE FROM accounts WHERE id = %s", (int(target),))
+            row_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            if row_count > 0:
+                bot.reply_to(message, f"🗑️ **ID #{target} ပါသော အကောင့်ကို ဖျက်လိုက်ပါပြီ။**")
+            else:
+                bot.reply_to(message, f"❌ ID #{target} မရှိပါ။")
+        elif mode_or_cat == "info":
+            cursor.execute("DELETE FROM accounts WHERE account_info = %s", (target,))
+            row_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            if row_count > 0:
+                bot.reply_to(message, f"🗑️ **အဆိုပါ အကောင့်ကို ဖျက်လိုက်ပါပြီ။**")
+            else:
+                bot.reply_to(message, f"❌ ထိုကဲ့သို့သော အကောင့် မရှိပါ။")
         else:
-            bot.reply_to(message, f"❌ ID #{target} ကို မတွေ့ရှိပါ။")
-    elif mode == "info":
-        cursor.execute("DELETE FROM accounts WHERE account_info = %s", (target,))
-        row_count = cursor.rowcount
-        conn.commit()
-        conn.close()
-        if row_count > 0:
-            bot.reply_to(message, "🗑️ **အဆိုပါ အကောင့်ကို Stock ထဲမှ အောင်မြင်စွာ ဖျက်လိုက်ပါပြီ။**", parse_mode="Markdown")
-        else:
-            bot.reply_to(message, "❌ ထိုကဲ့သို့သော အကောင့် Stock ထဲတွင် မရှိပါ။")
+            conn.close()
+            bot.reply_to(message, "⚠️ ပုံစံ မှားယွင်းနေပါသည်။")
     else:
-        conn.close()
-        bot.reply_to(message, "⚠️ ပုံစံ မှားယွင်းနေပါသည်။ `/delacc id <id>` သို့မဟုတ် `/delacc info <text>` ဟု သုံးပါ။", parse_mode="Markdown")
+        # ဥပမာ: /delacc x 2
+        category = mode_or_cat
+        if parts[2].isdigit():
+            qty = int(parts[2])
+            cursor.execute("DELETE FROM accounts WHERE category = %s AND status = 'available' LIMIT %s", (category, qty))
+            row_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+            bot.reply_to(message, f"🗑️ **{category.upper()} Stock ထဲမှ အကောင့် {row_count} ကောင့်ကို ဖျက်လိုက်ပါပြီ။**", parse_mode="Markdown")
+        else:
+            conn.close()
+            bot.reply_to(message, "⚠️ အရေအတွက် ထည့်ရန် မမှန်ကန်ပါ။ (ဥပမာ: `/delacc x 2`)", parse_mode="Markdown")
 
-@bot.message_handler(commands=['stock'])
+@bot.message_handler(commands=['stock', 'all stock', 'allstock'])
 def check_stock_admin(message):
     if message.from_user.id != ADMIN_ID: return
-    x_count = get_stock_count('x')
-    out_count = get_stock_count('outlook')
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM accounts WHERE status = 'sold'")
-    total_sold = cursor.fetchone()[0]
-    conn.close()
-    bot.reply_to(message, f"📊 **Current Store Status**\n\n🔹 X Available: {x_count}\n🔹 Outlook Available: {out_count}\n🔸 Total Sold: {total_sold}", parse_mode="Markdown")
-
-@bot.message_handler(commands=['allstock'])
-def send_all_stock(message):
-    if message.from_user.id != ADMIN_ID: return
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, category, account_info FROM accounts WHERE status = 'available'")
-    rows = cursor.fetchall()
-    conn.close()
     
-    if not rows:
-        bot.reply_to(message, "⚠️ လက်ရှိ ရရှိနိုင်သော Stock လုံးဝ မရှိသေးပါ။")
-        return
+    if "all" in message.text.lower():
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, category, account_info FROM accounts WHERE status = 'available'")
+        rows = cursor.fetchall()
+        conn.close()
         
-    file_path = "available_stock_list.txt"
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write("=== ALL AVAILABLE STOCK LIST ===\n\n")
-        for r in rows:
-            f.write(f"ID: {r[0]} | Category: {r[1].upper()} | Account: {r[2]}\n")
+        if not rows:
+            bot.reply_to(message, "⚠️ လက်ရှိ ရရှိနိုင်သော Stock လုံးဝ မရှိသေးပါ။")
+            return
             
-    with open(file_path, "rb") as f:
-        bot.send_document(ADMIN_ID, f, caption=f"📦 **Available Stock List (Total: {len(rows)})**", parse_mode="Markdown")
-    os.remove(file_path)
+        file_path = "available_stock_list.txt"
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write("=== ALL AVAILABLE STOCK LIST ===\n\n")
+            for r in rows:
+                f.write(f"ID: {r[0]} | Category: {r[1].upper()} | Account: {r[2]}\n")
+                
+        with open(file_path, "rb") as f:
+            bot.send_document(ADMIN_ID, f, caption=f"📦 **Available Stock List (Total: {len(rows)})**", parse_mode="Markdown")
+        os.remove(file_path)
+    else:
+        x_count = get_stock_count('x')
+        out_count = get_stock_count('outlook')
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM accounts WHERE status = 'sold'")
+        total_sold = cursor.fetchone()[0]
+        conn.close()
+        bot.reply_to(message, f"📊 **Current Store Status**\n\n🔹 X Available: {x_count}\n🔹 Outlook Available: {out_count}\n🔸 Total Sold: {total_sold}", parse_mode="Markdown")
 
 @bot.message_handler(commands=['history'])
 def show_history(message):
@@ -375,7 +386,7 @@ def force_pay(message):
         except Exception as e:
             bot.reply_to(message, f"⚠️ User ထံ ပို့၍မရပါ: {e}")
             
-        # 📢 Channel သို့ ဝယ်ယူမှု Notification ပို့ရန်
+        # 📢 Channel သို့ ဝယ်ယူမှု Notification ပို့ရန် (Force Pay ဖြစ်စေ, ပုံမှန်ဝယ်သည်ဖြစ်စေ အမြဲပြမည်)
         channel_noti = f"🛍️ **[NEW PURCHASE SUCCESS]**\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n🪙 Paid Coin: `{coin.upper()}`"
         try:
             bot.send_message(CHANNEL_ID, channel_noti, parse_mode="Markdown")
