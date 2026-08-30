@@ -1,5 +1,1 @@
-pyTelegramBotAPI
-requests
-bip-utils
-Flask
-gunicorn
+psycopg2-binary==2.9.9
