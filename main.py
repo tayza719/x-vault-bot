@@ -17,6 +17,7 @@ CHANNEL_ID = "@alphavalut" # Public Channel
 BOT_USERNAME = "SocialXStoreBot"
 
 PRICES = {"x": 0.15, "outlook": 0.10}
+VALID_CATEGORIES = frozenset(PRICES)
 MAINTENANCE_MODE = False
 
 logging.basicConfig(level=logging.INFO)
@@ -39,7 +40,8 @@ def init_db():
             account_info TEXT UNIQUE,
             status VARCHAR(20) DEFAULT 'available',
             buyer_id BIGINT,
-            sold_at TEXT
+            sold_at TEXT,
+            order_id INT
         )
     ''')
     
@@ -53,7 +55,8 @@ def init_db():
             address TEXT,
             amount_coin REAL,
             status VARCHAR(20) DEFAULT 'pending',
-            created_at TEXT
+            created_at TEXT,
+            payment_method VARCHAR(20) DEFAULT 'crypto'
         )
     ''')
     
@@ -64,11 +67,20 @@ def init_db():
         )
     ''')
     
-    # Auto-migrate for is_banned column
+    # Small, idempotent migrations for databases created by older versions.
     cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='is_banned'")
     if not cursor.fetchone():
         cursor.execute("ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT FALSE")
-        
+
+    cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='accounts' AND column_name='order_id'")
+    if not cursor.fetchone():
+        cursor.execute("ALTER TABLE accounts ADD COLUMN order_id INT")
+
+    cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='orders' AND column_name='payment_method'")
+    if not cursor.fetchone():
+        cursor.execute("ALTER TABLE orders ADD COLUMN payment_method VARCHAR(20) DEFAULT 'crypto'")
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_accounts_stock ON accounts (category, status)")
     conn.commit()
     conn.close()
 
@@ -154,29 +166,42 @@ def check_blockchain_balance(address: str, coin: str) -> float:
         return 0.0
 
 def get_stock_count(category):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM accounts WHERE category = %s AND status = 'available'", (category,))
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
+    category = category.strip().lower()
+    if category not in VALID_CATEGORIES:
+        return 0
+    with get_db() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT COUNT(*) FROM accounts WHERE category = %s AND status = 'available'",
+            (category,),
+        )
+        return int(cursor.fetchone()[0])
+
 
 def add_accounts_to_db(category, acc_list):
-    conn = get_db()
-    cursor = conn.cursor()
-    added, duplicates = 0, 0
-    for acc in acc_list:
-        try:
-            cursor.execute("INSERT INTO accounts (category, account_info) VALUES (%s, %s)", (category, acc))
-            added += 1
-        except IntegrityError:
-            conn.rollback()
-            duplicates += 1
-        except Exception:
-            conn.rollback()
-    conn.commit()
-    conn.close()
-    return added, duplicates
+    """Insert accounts atomically and count only rows actually inserted.
+
+    ON CONFLICT avoids rolling back earlier successful inserts when one line is
+    a duplicate, which was the main reason the displayed count could be wrong.
+    """
+    category = category.strip().lower()
+    if category not in VALID_CATEGORIES:
+        return 0, 0
+
+    clean_accounts = list(dict.fromkeys(line.strip() for line in acc_list if line.strip()))
+    if not clean_accounts:
+        return 0, 0
+
+    with get_db() as conn, conn.cursor() as cursor:
+        cursor.executemany(
+            """
+            INSERT INTO accounts (category, account_info)
+            VALUES (%s, %s)
+            ON CONFLICT (account_info) DO NOTHING
+            """,
+            [(category, account_info) for account_info in clean_accounts],
+        )
+        added = cursor.rowcount
+    return int(added), len(clean_accounts) - int(added)
 
 # ==========================================
 # COMMAND HANDLERS
@@ -259,6 +284,9 @@ def add_acc(message):
     parts = raw_text.split(maxsplit=1)
     if len(parts) < 2: return
     category = parts[0].lower()
+    if category not in VALID_CATEGORIES:
+        bot.reply_to(message, "⚠️ Category သည် `x` သို့မဟုတ် `outlook` ဖြစ်ရပါမည်။", parse_mode="Markdown")
+        return
     acc_data = parts[1].strip()
     acc_lines = [line.strip() for line in acc_data.split("\n") if line.strip()]
     
@@ -426,16 +454,23 @@ def force_pay(message):
         conn.close()
         return
 
-    cursor.execute("SELECT id, account_info FROM accounts WHERE category = %s AND status = 'available' LIMIT %s", (category, qty))
+    cursor.execute("SELECT id, account_info FROM accounts WHERE category = %s AND status = 'available' ORDER BY id LIMIT %s FOR UPDATE SKIP LOCKED", (category, qty))
     rows = cursor.fetchall()
     
     if len(rows) >= qty:
         account_ids = tuple(r[0] for r in rows)
         accounts_info = [r[1] for r in rows]
-        
-        # ⚠️ Forcepay logic: DB ထဲမှ အပြီးဖျက်ထုတ်လိုက်ပါသည် (နောင်တွင် /addacc ဖြင့် Format မပျက် ပြန်ထည့်နိုင်စေရန်)
-        cursor.execute("DELETE FROM accounts WHERE id IN %s", (account_ids,))
-        cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
+
+        # Keep the rows so an admin can safely re-add this specific forcepay order.
+        now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s",
+            (user_id, now_str, order_id, account_ids),
+        )
+        cursor.execute(
+            "UPDATE orders SET status = 'completed', payment_method = 'forcepay' WHERE order_id = %s",
+            (order_id,),
+        )
         conn.commit()
         
         acc_text = "\n".join(accounts_info)
@@ -480,6 +515,48 @@ def force_pay(message):
         bot.reply_to(message, f"❌ Stock မလုံလောက်ပါ (လိုအပ်ချက်: {qty})")
         
     conn.close()
+
+
+@bot.message_handler(commands=['readdforce'])
+def readd_forcepay_accounts(message):
+    """Admin-only: return accounts sold by one forcepay order to available stock."""
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.reply_to(message, "⚠️ အသုံးပြုပုံ: `/readdforce <order_id>`", parse_mode="Markdown")
+        return
+
+    order_id = int(parts[1])
+    with get_db() as conn, conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT status, payment_method FROM orders WHERE order_id = %s FOR UPDATE",
+            (order_id,),
+        )
+        order = cursor.fetchone()
+        if not order:
+            bot.reply_to(message, f"❌ Order #{order_id} မရှိပါ။")
+            return
+        status, payment_method = order
+        if status != 'completed' or payment_method != 'forcepay':
+            bot.reply_to(message, "⚠️ ဒီ Order သည် admin forcepay order မဟုတ်ပါ၊ သို့မဟုတ် ပြီးစီးပြီးသား flow မဟုတ်ပါ။")
+            return
+
+        cursor.execute(
+            """
+            UPDATE accounts
+               SET status = 'available', buyer_id = NULL, sold_at = NULL, order_id = NULL
+             WHERE order_id = %s AND status = 'sold'
+            """,
+            (order_id,),
+        )
+        restored = cursor.rowcount
+
+    bot.reply_to(
+        message,
+        f"♻️ Forcepay Order #{order_id} မှ account {restored} ခုကို Available stock သို့ ပြန်ထည့်ပြီးပါပြီ။",
+    )
 
 # ==========================================
 # CALLBACK HANDLER (INLINE BUTTONS)
@@ -649,7 +726,7 @@ def handle_query(call):
         current_balance = check_blockchain_balance(address, coin)
         
         if current_balance >= (amount_coin * 0.98):
-            cursor.execute("SELECT id, account_info FROM accounts WHERE category = %s AND status = 'available' LIMIT %s", (category, qty))
+            cursor.execute("SELECT id, account_info FROM accounts WHERE category = %s AND status = 'available' ORDER BY id LIMIT %s FOR UPDATE SKIP LOCKED", (category, qty))
             rows = cursor.fetchall()
             
             if len(rows) >= qty:
@@ -658,8 +735,8 @@ def handle_query(call):
                 now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
                 
                 # ⚠️ တကယ့် Real Crypto Purchase ဖြစ်၍ DB တွင် 'sold' သို့ပြောင်းပြီး Block ထားမည် (ပြန် Add မရပါ)
-                cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s WHERE id IN %s", (user_id, now_str, account_ids))
-                cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
+                cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s", (user_id, now_str, order_id, account_ids))
+                cursor.execute("UPDATE orders SET status = 'completed', payment_method = 'crypto' WHERE order_id = %s", (order_id,))
                 conn.commit()
                 
                 acc_text = "\n".join(accounts_info)
