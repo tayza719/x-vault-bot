@@ -201,6 +201,15 @@ def add_acc(message):
     bot.reply_to(message, f"✅ **{category.upper()} Stock အသစ် {added} ကောင့် ထည့်သွင်းပြီးပါပြီ!**\n(Duplicates: {dupes})", parse_mode="Markdown")
     
     if added > 0:
+        # 1. Admin ဆီသို့ ထည့်လိုက်သည့်အကောင့်များကို File ဖြင့်ပို့ပေးခြင်း
+        file_path = f"added_stock_{category}.txt"
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(acc_lines))
+        with open(file_path, "rb") as f:
+            bot.send_document(ADMIN_ID, f, caption=f"📥 **Newly Added {category.upper()} Accounts (Qty: {added})**", parse_mode="Markdown")
+        os.remove(file_path)
+
+        # 2. Channel သို့ Noti ပို့ခြင်း
         channel_noti = f"📦 **[NEW STOCK ADDED]**\n🔹 Category: `{category.upper()}`\n📈 Qty Added: `{added}` Accounts\n🛒 ဝယ်ယူလိုပါက အောက်ပါခလုတ်ကို နှိပ်ပါ -"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
@@ -248,7 +257,6 @@ def delete_acc(message):
         category = mode_or_cat
         if parts[2].isdigit():
             qty = int(parts[2])
-            # PostgreSQL LIMIT Fix for DELETE
             cursor.execute("DELETE FROM accounts WHERE id IN (SELECT id FROM accounts WHERE category = %s AND status = 'available' LIMIT %s)", (category, qty))
             row_count = cursor.rowcount
             conn.commit()
@@ -258,21 +266,25 @@ def delete_acc(message):
             conn.close()
             bot.reply_to(message, "⚠️ အရေအတွက် ထည့်ရန် မှန်ကန်မှု မရှိပါ။", parse_mode="Markdown")
 
-@bot.message_handler(commands=['stock', 'all stock', 'allstock'])
+@bot.message_handler(commands=['stock', 'allstock', 'all stock'])
 def check_stock_admin(message):
     if message.from_user.id != ADMIN_ID: return
     
-    if "all" in message.text.lower():
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, category, account_info FROM accounts WHERE status = 'available'")
-        rows = cursor.fetchall()
-        conn.close()
-        
-        if not rows:
-            bot.reply_to(message, "⚠️ လက်ရှိ ရရှိနိုင်သော Stock လုံးဝ မရှိသေးပါ။")
-            return
-            
+    # 1. Text ဖြင့် အနှစ်ချုပ် ပြပေးခြင်း
+    x_count = get_stock_count('x')
+    out_count = get_stock_count('outlook')
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM accounts WHERE status = 'sold'")
+    total_sold = cursor.fetchone()[0]
+    bot.reply_to(message, f"📊 **Current Store Status**\n\n🔹 X Available: {x_count}\n🔹 Outlook Available: {out_count}\n🔸 Total Sold: {total_sold}", parse_mode="Markdown")
+    
+    # 2. File ဖြင့် Stock အားလုံးကို Admin ဆီ ပို့ပေးခြင်း
+    cursor.execute("SELECT id, category, account_info FROM accounts WHERE status = 'available'")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if rows:
         file_path = "available_stock_list.txt"
         with open(file_path, "w", encoding="utf-8") as f:
             f.write("=== ALL AVAILABLE STOCK LIST ===\n\n")
@@ -282,15 +294,6 @@ def check_stock_admin(message):
         with open(file_path, "rb") as f:
             bot.send_document(ADMIN_ID, f, caption=f"📦 **Available Stock List (Total: {len(rows)})**", parse_mode="Markdown")
         os.remove(file_path)
-    else:
-        x_count = get_stock_count('x')
-        out_count = get_stock_count('outlook')
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM accounts WHERE status = 'sold'")
-        total_sold = cursor.fetchone()[0]
-        conn.close()
-        bot.reply_to(message, f"📊 **Current Store Status**\n\n🔹 X Available: {x_count}\n🔹 Outlook Available: {out_count}\n🔸 Total Sold: {total_sold}", parse_mode="Markdown")
 
 @bot.message_handler(commands=['history'])
 def show_history(message):
@@ -389,6 +392,15 @@ def force_pay(message):
         except Exception as e:
             bot.reply_to(message, f"⚠️ User ထံ ပို့၍မရပါ: {e}")
             
+        # 1. Admin ဆီသို့ ရောင်းလိုက်သည့် အကောင့်များကို File ဖြင့်ပို့ပေးခြင်း
+        file_path = f"sold_order_{order_id}.txt"
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(acc_text)
+        with open(file_path, "rb") as f:
+            bot.send_document(ADMIN_ID, f, caption=f"🛍️ **Force Pay Sale (Order #{order_id})**\nUser: `{user_id}`\nQty: `{qty}` {category.upper()}", parse_mode="Markdown")
+        os.remove(file_path)
+
+        # 2. Channel သို့ ဝယ်ယူမှု Noti ပို့ခြင်း
         channel_noti = f"🛍️ **[NEW PURCHASE SUCCESS]**\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n🪙 Paid Coin: `{coin.upper()}`"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
@@ -589,6 +601,15 @@ def handle_query(call):
                 except Exception as e:
                     logging.error(f"User Message Failed: {e}")
                 
+                # 1. Admin ဆီသို့ ရောင်းလိုက်သည့် အကောင့်များကို File ဖြင့်ပို့ပေးခြင်း
+                file_path = f"sold_order_{order_id}.txt"
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(acc_text)
+                with open(file_path, "rb") as f:
+                    bot.send_document(ADMIN_ID, f, caption=f"🛍️ **New Sale (Order #{order_id})**\nUser: `{user_id}`\nQty: `{qty}` {category.upper()}", parse_mode="Markdown")
+                os.remove(file_path)
+
+                # 2. Channel သို့ ဝယ်ယူမှု Noti ပို့ခြင်း
                 channel_noti = f"🛍️ **[NEW PURCHASE SUCCESS]**\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n🪙 Paid Coin: `{coin.upper()}`"
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
