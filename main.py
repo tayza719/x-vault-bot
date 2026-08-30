@@ -13,7 +13,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 MNEMONIC = os.getenv("MASTER_MNEMONIC")
 DATABASE_URL = os.getenv("DATABASE_URL")
 CHANNEL_ID = "@alphavalut"
-BOT_USERNAME = "SocialXStoreBot"  # 🤖 Bot Username (앞 @ မပါဘဲ)
+BOT_USERNAME = "SocialXStoreBot"
 
 PRICES = {"x": 0.15, "outlook": 0.10}
 MAINTENANCE_MODE = False
@@ -248,7 +248,8 @@ def delete_acc(message):
         category = mode_or_cat
         if parts[2].isdigit():
             qty = int(parts[2])
-            cursor.execute("DELETE FROM accounts WHERE category = %s AND status = 'available' LIMIT %s", (category, qty))
+            # PostgreSQL LIMIT Fix for DELETE
+            cursor.execute("DELETE FROM accounts WHERE id IN (SELECT id FROM accounts WHERE category = %s AND status = 'available' LIMIT %s)", (category, qty))
             row_count = cursor.rowcount
             conn.commit()
             conn.close()
@@ -388,7 +389,6 @@ def force_pay(message):
         except Exception as e:
             bot.reply_to(message, f"⚠️ User ထံ ပို့၍မရပါ: {e}")
             
-        # 📢 Channel သို့ ဝယ်ယူမှု Notification ပို့ရန် (Bot Button ပါဝင်သည်)
         channel_noti = f"🛍️ **[NEW PURCHASE SUCCESS]**\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n🪙 Paid Coin: `{coin.upper()}`"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
@@ -589,7 +589,6 @@ def handle_query(call):
                 except Exception as e:
                     logging.error(f"User Message Failed: {e}")
                 
-                # 📢 Channel သို့ ဝယ်ယူမှု Notification ပို့ရန် (Bot Button ပါဝင်သည်)
                 channel_noti = f"🛍️ **[NEW PURCHASE SUCCESS]**\n🆔 Order: `#{order_id}`\n📦 Qty: `{qty}` {category.upper()}\n🪙 Paid Coin: `{coin.upper()}`"
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
