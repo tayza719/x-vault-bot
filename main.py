@@ -18,14 +18,15 @@ MNEMONIC = os.getenv("MASTER_MNEMONIC")
 DATABASE_URL = os.getenv("DATABASE_URL")
 CHANNEL_ID = "@alphavalut"
 BOT_USERNAME = "SocialXStoreBot"
-PRICES = {"x": 0.15, "outlook": 0.10}
+
+# ✅ Outlook ဖြုတ်ပြီး X တစ်ခုထဲပဲ ထားပါတယ်
+PRICES = {"x": 0.15}
 VALID_CATEGORIES = frozenset(PRICES)
 MAINTENANCE_MODE = False
 
 logging.basicConfig(level=logging.INFO)
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Bot ပို့မြန့်ေစရန် Seed ကို တစ်ခါတည်း တွက်ချက်ထားခြင်း
 SEED_BYTES = Bip39SeedGenerator(MNEMONIC).Generate() if MNEMONIC else None
 
 # ============================================
@@ -37,7 +38,6 @@ def get_db():
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
             id SERIAL PRIMARY KEY,
@@ -50,7 +50,6 @@ def init_db():
             forcepay_test BOOLEAN DEFAULT FALSE
         )
     """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             order_id SERIAL PRIMARY KEY,
@@ -65,14 +64,12 @@ def init_db():
             payment_method VARCHAR(20) DEFAULT 'crypto'
         )
     """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
             is_banned BOOLEAN DEFAULT FALSE
         )
     """)
-
     conn.commit()
     conn.close()
 
@@ -87,28 +84,24 @@ def is_banned(user_id):
     return res[0] if res else False
 
 # ============================================
-# 3. Crypto & Blockchain Functions (PDF ထဲက အတိုင်း ပြင်ထားပါ)
+# 3. Crypto & Blockchain Functions
 # ============================================
 def generate_hd_address(coin: str, index: int) -> str:
     if not SEED_BYTES:
         return None
     addr = None
     if coin == "sol":
-        # Phantom / Solflare Standard Path (m/44'/501'/index'/0')
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.SOLANA)
         addr = bip_mst.Purpose().Coin().Account(index).Change(Bip44Changes.CHAIN_EXT).PublicKey().ToAddress()
     elif coin == "pol":
-        # Polygon Standard Path (m/44'/60'/0'/0/index)
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.POLYGON)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
         if addr: addr = addr.lower()
     elif coin == "bnb":
-        # BSC Standard Path (m/44'/60'/0'/0/index)
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.BINANCE_SMART_CHAIN)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
         if addr: addr = addr.lower()
     elif coin == "trx":
-        # Tron Standard Path (m/44'/195'/0'/0/index)
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.TRON)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
     return addr
@@ -179,7 +172,7 @@ def add_accounts_to_db(category, acc_list):
     return added, duplicates
 
 # ============================================
-# 4. Command Handlers (SS ထဲက အတိုင်း 100% မပြောင်းပါ)
+# 4. Command Handlers
 # ============================================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -244,6 +237,9 @@ def add_acc(message):
     parts = raw_text.split(maxsplit=1)
     if len(parts) < 2: return
     category = parts[0].lower()
+    if category not in VALID_CATEGORIES:
+        bot.reply_to(message, "❌ Invalid category. Only 'x' is allowed.")
+        return
     acc_data = parts[1].strip()
     acc_lines = [line.strip() for line in acc_data.split("\n") if line.strip()]
     added, dupes = add_accounts_to_db(category, acc_lines)
@@ -253,16 +249,15 @@ def add_acc(message):
 def check_stock_admin(message):
     if message.from_user.id != ADMIN_ID: return
     x_count = get_stock_count('x')
-    out_count = get_stock_count('outlook')
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM accounts WHERE status = 'sold'")
     total_sold = cursor.fetchone()[0]
     conn.close()
-    bot.reply_to(message, f"**Current Store Status**\n\n✦ X Available: {x_count}\n✦ Outlook Available: {out_count}\n✦ Total Sold: {total_sold}", parse_mode="Markdown")
+    bot.reply_to(message, f"**Current Store Status**\n\n✦ X Available: {x_count} (Price: ${PRICES['x']})\n✦ Total Sold: {total_sold}", parse_mode="Markdown")
 
 # ============================================
-# 5. Force Pay (SS ထဲက အတိုင်း 100% မပြောင်းပါ)
+# 5. Force Pay (Channel Noti ပါဝင်ပါပြီ)
 # ============================================
 @bot.message_handler(commands=['forcepay'])
 def force_pay(message):
@@ -300,7 +295,7 @@ def force_pay(message):
         cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s", (user_id, now_str, order_id, account_ids))
         cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
 
-        # SS ထဲက အတိုင်း Auto Replenish
+        # Auto Replenish
         cursor.execute("""
             UPDATE accounts 
             SET status = 'available', buyer_id = NULL, sold_at = NULL, order_id = NULL, forcepay_test = FALSE 
@@ -310,7 +305,6 @@ def force_pay(message):
                 LIMIT %s
             )
         """, (category, qty))
-        replenished_count = cursor.rowcount
 
         conn.commit()
 
@@ -322,15 +316,38 @@ def force_pay(message):
         )
         try:
             bot.send_message(user_id, success_msg, parse_mode="Markdown")
-            bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။\n♻️ အကောင့်များကို Stock ထဲသို့ အလိုအလျောက် ပြန်ထည့်ပေးလိုက်ပါပြီ။")
         except Exception as e:
-            bot.reply_to(message, f"✅ Order အောင်မြင်ပါပြီ။ သို့သော် User ထံ Noti ပို့၍ မရပါ။ ({e})")
+            logging.error(f"User Noti Failed: {e}")
+
+        # 1. Admin ဆီသို့ File ပို့ခြင်း & Admin Channel Noti
+        file_path = f"sold_order_{order_id}.txt"
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(acc_text)
+
+        with open(file_path, "rb") as f:
+            try:
+                bot.send_document(ADMIN_ID, f, caption=f"🧰 **ADMIN FORCEPAY ALERT**\n👤 Buyer User ID: `{user_id}`\n🆔 Order ID: `#{order_id}`\n📦 Category: {category.upper()} ({qty} accs)\n💰 Amount Received: MANUAL\n📍 Address: ADMIN_FORCE_PAY", parse_mode="Markdown")
+            except Exception as e:
+                logging.error(f"Admin File Send Failed: {e}")
+        os.remove(file_path)
+
+        # 2. Channel သို့ Noti ပို့ခြင်း
+        channel_noti = f"🧧 **NEW PURCHASE SUCCESS**\n🆔 Order: `#{order_id}`\n📦 Qty: {qty} {category.upper()}\n🪙 Paid Coin: {coin.upper()}"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
+        try:
+            bot.send_message(CHANNEL_ID, channel_noti, reply_markup=markup, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Channel Purchase Noti Failed: {e}")
+
+        # Admin ကို ပြန်ကြားခြင်း
+        bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။\n♻️ အကောင့်များကို Stock ထဲသို့ အလိုအလျောက် ပြန်ထည့်ပေးလိုက်ပါပြီ။")
     else:
         bot.reply_to(message, f"❌ Stock မလောက်ပါ။ (လိုအပ်ချက်: {qty})")
     conn.close()
 
 # ============================================
-# 6. Callback Handlers (Payment ပိုင်းကိုသာ PDF ထဲက အတိုင်း ပြောင်းထားပါ)
+# 6. Callback Handlers (X တစ်ခုထဲပဲ ပြပါမည်)
 # ============================================
 @bot.callback_query_handler(func=lambda call: True)
 def handle_query(call):
@@ -344,26 +361,24 @@ def handle_query(call):
 
     data = call.data
 
-    # 1. Language Selection (SS အတိုင်း)
+    # 1. Language Selection (X တစ်ခုတည်း ပြပါမည်)
     if data.startswith("lang_"):
         lang = data.split("_")[1]
         x_stock = get_stock_count('x')
-        outlook_stock = get_stock_count('outlook')
 
         if lang == "mm":
-            welcome_text = f"**Alpha Vault Store**\n\n✦ X ကောင့်လက်ကျန်: {x_stock} (ဈေးနှုန်း: ${PRICES['x']})\n✦ Outlook လက်ကျန်: {outlook_stock} (ဈေးနှုန်း: ${PRICES['outlook']})\n\nဝယ်ယူလိုသော အမျိုးအစားကို ရွေးချယ်ပါ -"
+            welcome_text = f"**Alpha Vault Store**\n\n✦ X ကောင့်လက်ကျန်: {x_stock} (ဈေးနှုန်း: ${PRICES['x']})\n\nဝယ်ယူလိုသော အမျိုးအစားကို ရွေးချယ်ပါ -"
         else:
-            welcome_text = f"**Alpha Vault Store**\n\n✦ X Stock: {x_stock} (Price: ${PRICES['x']})\n✦ Outlook Stock: {outlook_stock} (Price: ${PRICES['outlook']})\n\nSelect category -"
+            welcome_text = f"**Alpha Vault Store**\n\n✦ X Stock: {x_stock} (Price: ${PRICES['x']})\n\nSelect category -"
 
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton("🐦 X  Accounts", callback_data=f"cat_x_{lang}"),
-            types.InlineKeyboardButton("📧 Outlook  Accounts", callback_data=f"cat_outlook_{lang}")
+            types.InlineKeyboardButton("🐦 X  Accounts", callback_data=f"cat_x_{lang}")
         )
         markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/alphavalut"))
         bot.edit_message_text(welcome_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 2. Category Selection -> Qty (SS အတိုင်း)
+    # 2. Category Selection -> Qty (X တစ်ခုတည်း)
     elif data.startswith("cat_"):
         parts = data.split("_")
         category = parts[1]
@@ -392,7 +407,7 @@ def handle_query(call):
 
         bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 3. Qty Selection -> Coin Selection (SS အတိုင်း)
+    # 3. Qty Selection -> Coin Selection
     elif data.startswith("qty_"):
         parts = data.split("_")
         category = parts[1]
@@ -414,7 +429,7 @@ def handle_query(call):
         pay_title = "💰 ငွေပေးချေမည့် ကို ရွေးချယ်ပါ" if lang == "mm" else "💰 Select Crypto for payment"
         bot.edit_message_text(f"**{pay_title}**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 4. Pay Checkout -> Generate Order (Payment ကို PDF ထဲက အတိုင်း ပြောင်းပါ)
+    # 4. Pay Checkout -> Generate Order (PDF Logic)
     elif data.startswith("pay_"):
         parts = data.split("_")
         category = parts[1]
@@ -477,7 +492,7 @@ def handle_query(call):
             logging.error(f"Order Creation Error: {e}")
             bot.answer_callback_query(call.id, "Order Failed.", show_alert=True)
 
-    # 5. Check Payment Handler (Payment ကို PDF ထဲက အတိုင်း ပြောင်းပါ)
+    # 5. Check Payment Handler
     elif data.startswith("check_"):
         parts = data.split("_")
         order_id = int(parts[1])
@@ -504,7 +519,7 @@ def handle_query(call):
 
         created_time = datetime.datetime.strptime(created_time, "%Y-%m-%d %H:%M:%S")
         time_diff = (datetime.datetime.utcnow() - created_time).total_seconds()
-        if time_diff > 900: # 15 minutes
+        if time_diff > 900:
             cursor.execute("UPDATE orders SET status = 'expired' WHERE order_id = %s", (order_id,))
             conn.commit()
             conn.close()
