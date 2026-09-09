@@ -87,24 +87,28 @@ def is_banned(user_id):
     return res[0] if res else False
 
 # ============================================
-# 3. Crypto & Blockchain Functions
+# 3. Crypto & Blockchain Functions (PDF ထဲက အတိုင်း ပြင်ထားပါ)
 # ============================================
 def generate_hd_address(coin: str, index: int) -> str:
     if not SEED_BYTES:
         return None
     addr = None
     if coin == "sol":
+        # Phantom / Solflare Standard Path (m/44'/501'/index'/0')
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.SOLANA)
         addr = bip_mst.Purpose().Coin().Account(index).Change(Bip44Changes.CHAIN_EXT).PublicKey().ToAddress()
     elif coin == "pol":
+        # Polygon Standard Path (m/44'/60'/0'/0/index)
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.POLYGON)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
         if addr: addr = addr.lower()
     elif coin == "bnb":
+        # BSC Standard Path (m/44'/60'/0'/0/index)
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.BINANCE_SMART_CHAIN)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
         if addr: addr = addr.lower()
     elif coin == "trx":
+        # Tron Standard Path (m/44'/195'/0'/0/index)
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.TRON)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
     return addr
@@ -157,7 +161,6 @@ def get_stock_count(category):
     conn.close()
     return count
 
-# ⚠️ SS ထဲက အတိုင်း ပြန်ရေးထားပါတယ် (forcepay_test logic ပါပြီ)
 def add_accounts_to_db(category, acc_list):
     conn = get_db()
     cursor = conn.cursor()
@@ -176,7 +179,7 @@ def add_accounts_to_db(category, acc_list):
     return added, duplicates
 
 # ============================================
-# 4. Command Handlers
+# 4. Command Handlers (SS ထဲက အတိုင်း 100% မပြောင်းပါ)
 # ============================================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -259,7 +262,7 @@ def check_stock_admin(message):
     bot.reply_to(message, f"**Current Store Status**\n\n✦ X Available: {x_count}\n✦ Outlook Available: {out_count}\n✦ Total Sold: {total_sold}", parse_mode="Markdown")
 
 # ============================================
-# 5. Force Pay (SS ထဲက အတိုင်း အတိအကျ)
+# 5. Force Pay (SS ထဲက အတိုင်း 100% မပြောင်းပါ)
 # ============================================
 @bot.message_handler(commands=['forcepay'])
 def force_pay(message):
@@ -296,6 +299,19 @@ def force_pay(message):
 
         cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s", (user_id, now_str, order_id, account_ids))
         cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
+
+        # SS ထဲက အတိုင်း Auto Replenish
+        cursor.execute("""
+            UPDATE accounts 
+            SET status = 'available', buyer_id = NULL, sold_at = NULL, order_id = NULL, forcepay_test = FALSE 
+            WHERE id IN (
+                SELECT id FROM accounts 
+                WHERE category = %s AND status = 'sold' 
+                LIMIT %s
+            )
+        """, (category, qty))
+        replenished_count = cursor.rowcount
+
         conn.commit()
 
         acc_text = "\n".join(accounts_info)
@@ -306,7 +322,7 @@ def force_pay(message):
         )
         try:
             bot.send_message(user_id, success_msg, parse_mode="Markdown")
-            bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။")
+            bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။\n♻️ အကောင့်များကို Stock ထဲသို့ အလိုအလျောက် ပြန်ထည့်ပေးလိုက်ပါပြီ။")
         except Exception as e:
             bot.reply_to(message, f"✅ Order အောင်မြင်ပါပြီ။ သို့သော် User ထံ Noti ပို့၍ မရပါ။ ({e})")
     else:
@@ -314,7 +330,7 @@ def force_pay(message):
     conn.close()
 
 # ============================================
-# 6. Callback Handlers (Inline Buttons & Multilingual UI)
+# 6. Callback Handlers (Payment ပိုင်းကိုသာ PDF ထဲက အတိုင်း ပြောင်းထားပါ)
 # ============================================
 @bot.callback_query_handler(func=lambda call: True)
 def handle_query(call):
@@ -328,7 +344,7 @@ def handle_query(call):
 
     data = call.data
 
-    # 1. Language Selection
+    # 1. Language Selection (SS အတိုင်း)
     if data.startswith("lang_"):
         lang = data.split("_")[1]
         x_stock = get_stock_count('x')
@@ -347,7 +363,7 @@ def handle_query(call):
         markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/alphavalut"))
         bot.edit_message_text(welcome_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 2. Category Selection -> Qty
+    # 2. Category Selection -> Qty (SS အတိုင်း)
     elif data.startswith("cat_"):
         parts = data.split("_")
         category = parts[1]
@@ -376,7 +392,7 @@ def handle_query(call):
 
         bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 3. Qty Selection -> Coin Selection
+    # 3. Qty Selection -> Coin Selection (SS အတိုင်း)
     elif data.startswith("qty_"):
         parts = data.split("_")
         category = parts[1]
@@ -398,7 +414,7 @@ def handle_query(call):
         pay_title = "💰 ငွေပေးချေမည့် ကို ရွေးချယ်ပါ" if lang == "mm" else "💰 Select Crypto for payment"
         bot.edit_message_text(f"**{pay_title}**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 4. Pay Checkout -> Generate Order (PDF ထဲက Logic ကို ပြောင်းထားပါ)
+    # 4. Pay Checkout -> Generate Order (Payment ကို PDF ထဲက အတိုင်း ပြောင်းပါ)
     elif data.startswith("pay_"):
         parts = data.split("_")
         category = parts[1]
@@ -461,7 +477,7 @@ def handle_query(call):
             logging.error(f"Order Creation Error: {e}")
             bot.answer_callback_query(call.id, "Order Failed.", show_alert=True)
 
-    # 5. Check Payment Handler (PDF ထဲက Logic ကို ပြောင်းထားပါ)
+    # 5. Check Payment Handler (Payment ကို PDF ထဲက အတိုင်း ပြောင်းပါ)
     elif data.startswith("check_"):
         parts = data.split("_")
         order_id = int(parts[1])
