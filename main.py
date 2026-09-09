@@ -27,12 +27,14 @@ MAINTENANCE_MODE = False
 logging.basicConfig(level=logging.INFO)
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# Bot ပို့မြန့်ေစရန် Seed ကို တစ်ခါတည်း တွက်ချက်ထားခြင်း
 SEED_BYTES = Bip39SeedGenerator(MNEMONIC).Generate() if MNEMONIC else None
 
 # ============================================
 # 2. Database Functions
 # ============================================
 def get_db():
+    # Neon DB မှာ SSL ပါပြီးသားမို့ မူရင်းအတိုင်း ထားပါ
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
 def init_db():
@@ -367,9 +369,9 @@ def handle_query(call):
         x_stock = get_stock_count('x')
 
         if lang == "mm":
-            welcome_text = f"**Alpha Vault Store**\n\n✦ X ကောင့်လက်ကျန်: {x_stock} (ဈေးနှုန်း: ${PRICES['x']})\n\nဝယ်ယူလိုသော အမျိုးအစားကို ရွေးချယ်ပါ -"
+            welcome_text = f"**X Stock: {x_stock} (Price: ${PRICES['x']})**"
         else:
-            welcome_text = f"**Alpha Vault Store**\n\n✦ X Stock: {x_stock} (Price: ${PRICES['x']})\n\nSelect category -"
+            welcome_text = f"**X Stock: {x_stock} (Price: ${PRICES['x']})**"
 
         markup = types.InlineKeyboardMarkup()
         markup.add(
@@ -407,7 +409,7 @@ def handle_query(call):
 
         bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 3. Qty Selection -> Coin Selection
+    # 3. Qty Selection -> Coin Selection (Emoji အရောင်များဖြင့်)
     elif data.startswith("qty_"):
         parts = data.split("_")
         category = parts[1]
@@ -416,8 +418,8 @@ def handle_query(call):
 
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton("◎ Solana (SOL)", callback_data=f"pay_{category}_{qty}_sol_{lang}"),
-            types.InlineKeyboardButton("⬡ Polygon (POL)", callback_data=f"pay_{category}_{qty}_pol_{lang}")
+            types.InlineKeyboardButton("🟢 Solana (SOL)", callback_data=f"pay_{category}_{qty}_sol_{lang}"),
+            types.InlineKeyboardButton("🟣 Polygon (POL)", callback_data=f"pay_{category}_{qty}_pol_{lang}")
         )
         markup.add(
             types.InlineKeyboardButton("🟡 BNB Chain (BNB)", callback_data=f"pay_{category}_{qty}_bnb_{lang}"),
@@ -429,7 +431,7 @@ def handle_query(call):
         pay_title = "💰 ငွေပေးချေမည့် ကို ရွေးချယ်ပါ" if lang == "mm" else "💰 Select Crypto for payment"
         bot.edit_message_text(f"**{pay_title}**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 4. Pay Checkout -> Generate Order (PDF Logic)
+    # 4. Pay Checkout -> Generate Order (Payment Logic)
     elif data.startswith("pay_"):
         parts = data.split("_")
         category = parts[1]
