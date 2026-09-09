@@ -13,7 +13,7 @@ from bip_utils import Bip39SeedGenerator, Bip44, Bip44Coins, Bip44Changes
 # ============================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-ADMIN_CHANNEL_ID = os.getenv("ADMIN_CHANNEL_ID")
+ADMIN_CHANNEL_ID = os.getenv("ADMIN_CHANNEL_ID")  # ✅ ဒီမှာ Private Channel ID ထည့်ပါ
 MNEMONIC = os.getenv("MASTER_MNEMONIC")
 DATABASE_URL = os.getenv("DATABASE_URL")
 CHANNEL_ID = "@alphavalut"
@@ -259,7 +259,7 @@ def check_stock_admin(message):
     bot.reply_to(message, f"**Current Store Status**\n\n✦ X Available: {x_count} (Price: ${PRICES['x']})\n✦ Total Sold: {total_sold}", parse_mode="Markdown")
 
 # ============================================
-# 5. Force Pay (Channel Noti ပါဝင်ပါပြီ)
+# 5. Force Pay (Private Channel ကို ပြန်ပို့ပါပြီ)
 # ============================================
 @bot.message_handler(commands=['forcepay'])
 def force_pay(message):
@@ -321,19 +321,19 @@ def force_pay(message):
         except Exception as e:
             logging.error(f"User Noti Failed: {e}")
 
-        # 1. Admin ဆီသို့ File ပို့ခြင်း & Admin Channel Noti
+        # 1. Private Channel သို့ File ပို့ခြင်း (ADMIN_CHANNEL_ID ကို ပြန်သုံးပါပြီ)
         file_path = f"sold_order_{order_id}.txt"
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(acc_text)
 
         with open(file_path, "rb") as f:
             try:
-                bot.send_document(ADMIN_ID, f, caption=f"🧰 **ADMIN FORCEPAY ALERT**\n👤 Buyer User ID: `{user_id}`\n🆔 Order ID: `#{order_id}`\n📦 Category: {category.upper()} ({qty} accs)\n💰 Amount Received: MANUAL\n📍 Address: ADMIN_FORCE_PAY", parse_mode="Markdown")
+                bot.send_document(ADMIN_CHANNEL_ID, f, caption=f"🧰 **ADMIN FORCEPAY ALERT**\n👤 Buyer User ID: `{user_id}`\n🆔 Order ID: `#{order_id}`\n📦 Category: {category.upper()} ({qty} accs)\n💰 Amount Received: MANUAL\n📍 Address: ADMIN_FORCE_PAY", parse_mode="Markdown")
             except Exception as e:
-                logging.error(f"Admin File Send Failed: {e}")
+                logging.error(f"Admin Channel File Send Failed: {e}")
         os.remove(file_path)
 
-        # 2. Channel သို့ Noti ပို့ခြင်း
+        # 2. Public Channel သို့ Noti ပို့ခြင်း
         channel_noti = f"🧧 **NEW PURCHASE SUCCESS**\n🆔 Order: `#{order_id}`\n📦 Qty: {qty} {category.upper()}\n🪙 Paid Coin: {coin.upper()}"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
