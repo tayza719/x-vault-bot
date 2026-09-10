@@ -27,8 +27,6 @@ MAINTENANCE_MODE = False
 logging.basicConfig(level=logging.INFO)
 bot = telebot.TeleBot(BOT_TOKEN)
 
-SEED_BYTES = Bip39SeedGenerator(MNEMONIC).Generate() if MNEMONIC else None
-
 # ============================================
 # 2. Database Functions
 # ============================================
@@ -38,7 +36,6 @@ def get_db():
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
             id SERIAL PRIMARY KEY,
@@ -51,7 +48,6 @@ def init_db():
             forcepay_test BOOLEAN DEFAULT FALSE
         )
     """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             order_id SERIAL PRIMARY KEY,
@@ -66,14 +62,12 @@ def init_db():
             payment_method VARCHAR(20) DEFAULT 'crypto'
         )
     """)
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
             is_banned BOOLEAN DEFAULT FALSE
         )
     """)
-
     conn.commit()
     conn.close()
 
@@ -299,7 +293,7 @@ def force_pay(message):
         cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s", (user_id, now_str, order_id, account_ids))
         cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
 
-        # ✅ Auto Replenish (SS ထဲက အတိုင်း ပြန်ဖြည့်ပါ)
+        # ✅ Auto Replenish
         cursor.execute("""
             UPDATE accounts 
             SET status = 'available', buyer_id = NULL, sold_at = NULL, order_id = NULL, forcepay_test = FALSE 
@@ -316,14 +310,16 @@ def force_pay(message):
         success_msg = (
             f"✅ **Payment Successful!**\n\n"
             f"**Your Accounts:**\n`{acc_text}`\n\n"
-            f"⚠️ ကျေးဇူးပြု၍ Password ချက်ချင်းပြောင်းပါ။"
+            f"📌 **Note / သတိေပးချက်:**\n"
+            f"အေကာင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းေြပာင်းလဲ အသုံးပြုပါရန်။\n"
+            f"Please change password and details immediately after receiving accounts. Thank you!"
         )
         try:
             bot.send_message(user_id, success_msg, parse_mode="Markdown")
         except Exception as e:
             logging.error(f"User Noti Failed: {e}")
 
-        # 1. Private Channel သို့ File ပို့ခြင်း (ADMIN_CHANNEL_ID ကို ပြန်သုံးပါပြီ)
+        # Private Channel သို့ File ပို့ခြင်း
         file_path = f"sold_order_{order_id}.txt"
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(acc_text)
@@ -335,7 +331,7 @@ def force_pay(message):
                 logging.error(f"Admin Channel File Send Failed: {e}")
         os.remove(file_path)
 
-        # 2. Public Channel သို့ Noti ပို့ခြင်း
+        # Public Channel သို့ Noti ပို့ခြင်း
         channel_noti = f"🧧 **NEW PURCHASE SUCCESS**\n🆔 Order: `#{order_id}`\n📦 Qty: {qty} {category.upper()}\n🪙 Paid Coin: {coin.upper()}"
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🛒 Buy Now / ဝယ်ယူရန်", url=f"https://t.me/{BOT_USERNAME}?start=start"))
@@ -344,7 +340,6 @@ def force_pay(message):
         except Exception as e:
             logging.error(f"Channel Purchase Noti Failed: {e}")
 
-        # Admin ကို ပြန်ကြားခြင်း
         bot.reply_to(message, f"✅ Order #{order_id} ကို Force Pay ဖြင့် အောင်မြင်စွာ ထုတ်ပေးလိုက်ပါပြီ။\n♻️ အကောင့်များကို Stock ထဲသို့ အလိုအလျောက် ပြန်ထည့်ပေးလိုက်ပါပြီ။")
     else:
         bot.reply_to(message, f"❌ Stock မလောက်ပါ။ (လိုအပ်ချက်: {qty})")
@@ -365,7 +360,7 @@ def handle_query(call):
 
     data = call.data
 
-    # 1. Language Selection (X တစ်ခုတည်း ပြပါမည်)
+    # 1. Language Selection
     if data.startswith("lang_"):
         lang = data.split("_")[1]
         x_stock = get_stock_count('x')
@@ -382,7 +377,7 @@ def handle_query(call):
         markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/alphavalut"))
         bot.edit_message_text(welcome_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 2. Category Selection -> Qty (X တစ်ခုတည်း)
+    # 2. Category Selection -> Qty
     elif data.startswith("cat_"):
         parts = data.split("_")
         category = parts[1]
@@ -411,7 +406,7 @@ def handle_query(call):
 
         bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 3. Qty Selection -> Coin Selection (Emoji အရောင်များဖြင့်)
+    # 3. Qty Selection -> Coin Selection
     elif data.startswith("qty_"):
         parts = data.split("_")
         category = parts[1]
@@ -548,10 +543,10 @@ def handle_query(call):
                 acc_text = "\n".join(accounts_info)
 
                 if lang == "mm":
-                    success_msg = f"✅ **ငွေပေးချေမှု အောင်မြင်ပါသည်။**\n\n**ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n⚠️ ကျေးဇူးပြု၍ Password ချက်ချင်းပြောင်းပါ။"
+                    success_msg = f"✅ **ငွေပေးချေမှု အောင်မြင်ပါသည်။**\n\n**ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n📌 **Note / သတိေပးချက်:** အေကာင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းေြပာင်းလဲ အသုံးပြုပါရန်။\nPlease change password and details immediately after receiving accounts. Thank you!"
                     alert_msg = "✅ အောင်မြင်ပါသည်။ အကောင့်များ ပို့ပေးလိုက်ပါပြီ။"
                 else:
-                    success_msg = f"✅ **Payment Successful!**\n\n**Your Accounts:**\n`{acc_text}`\n\n⚠️ Please change password immediately."
+                    success_msg = f"✅ **Payment Successful!**\n\n**Your Accounts:**\n`{acc_text}`\n\n📌 **Note:** Please change password and details immediately after receiving accounts. Thank you!"
                     alert_msg = "✅ Success! Accounts sent."
 
                 bot.send_message(user_id, success_msg, parse_mode="Markdown")
@@ -567,9 +562,6 @@ def handle_query(call):
 
         conn.close()
 
-# ============================================
-# 7. Main Runner
-# ============================================
 if __name__ == "__main__":
     print("Alpha Vault Bot is running...")
     bot.infinity_polling(skip_pending=True)
