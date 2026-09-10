@@ -27,6 +27,9 @@ MAINTENANCE_MODE = False
 logging.basicConfig(level=logging.INFO)
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# ✅ PDF ထဲက အတိုင်း Seed ကို တစ်ခါတည်း တွက်ထားပါတယ်
+SEED_BYTES = Bip39SeedGenerator(MNEMONIC).Generate() if MNEMONIC else None
+
 # ============================================
 # 2. Database Functions
 # ============================================
@@ -82,24 +85,28 @@ def is_banned(user_id):
     return res[0] if res else False
 
 # ============================================
-# 3. Crypto & Blockchain Functions
+# 3. Crypto & Blockchain Functions (PDF Logic)
 # ============================================
 def generate_hd_address(coin: str, index: int) -> str:
     if not SEED_BYTES:
         return None
     addr = None
     if coin == "sol":
+        # Phantom / Solflare Standard Path (m/44'/501'/index'/0')
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.SOLANA)
         addr = bip_mst.Purpose().Coin().Account(index).Change(Bip44Changes.CHAIN_EXT).PublicKey().ToAddress()
     elif coin == "pol":
+        # Polygon Standard Path (m/44'/60'/0'/0/index)
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.POLYGON)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
         if addr: addr = addr.lower()
     elif coin == "bnb":
+        # BSC Standard Path (m/44'/60'/0'/0/index)
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.BINANCE_SMART_CHAIN)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
         if addr: addr = addr.lower()
     elif coin == "trx":
+        # Tron Standard Path (m/44'/195'/0'/0/index)
         bip_mst = Bip44.FromSeed(SEED_BYTES, Bip44Coins.TRON)
         addr = bip_mst.Purpose().Coin().Account(0).Change(Bip44Changes.CHAIN_EXT).AddressIndex(index).PublicKey().ToAddress()
     return addr
@@ -293,7 +300,7 @@ def force_pay(message):
         cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s", (user_id, now_str, order_id, account_ids))
         cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
 
-        # ✅ Auto Replenish
+        # ✅ Auto Replenish (SS ထဲက အတိုင်း)
         cursor.execute("""
             UPDATE accounts 
             SET status = 'available', buyer_id = NULL, sold_at = NULL, order_id = NULL, forcepay_test = FALSE 
@@ -360,7 +367,7 @@ def handle_query(call):
 
     data = call.data
 
-    # 1. Language Selection
+    # 1. Language Selection (X တစ်ခုတည်း ပြပါမည်)
     if data.startswith("lang_"):
         lang = data.split("_")[1]
         x_stock = get_stock_count('x')
@@ -377,7 +384,7 @@ def handle_query(call):
         markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/alphavalut"))
         bot.edit_message_text(welcome_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 2. Category Selection -> Qty
+    # 2. Category Selection -> Qty (X တစ်ခုတည်း)
     elif data.startswith("cat_"):
         parts = data.split("_")
         category = parts[1]
@@ -406,7 +413,7 @@ def handle_query(call):
 
         bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 3. Qty Selection -> Coin Selection
+    # 3. Qty Selection -> Coin Selection (PDF Logic)
     elif data.startswith("qty_"):
         parts = data.split("_")
         category = parts[1]
@@ -428,7 +435,7 @@ def handle_query(call):
         pay_title = "💰 ငွေပေးချေမည့် ကို ရွေးချယ်ပါ" if lang == "mm" else "💰 Select Crypto for payment"
         bot.edit_message_text(f"**{pay_title}**", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 4. Pay Checkout -> Generate Order (Payment Logic)
+    # 4. Pay Checkout -> Generate Order (PDF Logic)
     elif data.startswith("pay_"):
         parts = data.split("_")
         category = parts[1]
@@ -491,7 +498,7 @@ def handle_query(call):
             logging.error(f"Order Creation Error: {e}")
             bot.answer_callback_query(call.id, "Order Failed.", show_alert=True)
 
-    # 5. Check Payment Handler
+    # 5. Check Payment Handler (PDF Logic)
     elif data.startswith("check_"):
         parts = data.split("_")
         order_id = int(parts[1])
