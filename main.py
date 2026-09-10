@@ -27,7 +27,7 @@ MAINTENANCE_MODE = False
 logging.basicConfig(level=logging.INFO)
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# ✅ PDF ထဲက အတိုင်း Seed ကို တစ်ခါတည်း တွက်ထားပါတယ်
+# ✅ Seed ကို တစ်ခါတည်း တွက်ထားပါတယ်
 SEED_BYTES = Bip39SeedGenerator(MNEMONIC).Generate() if MNEMONIC else None
 
 # ============================================
@@ -300,7 +300,7 @@ def force_pay(message):
         cursor.execute("UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s", (user_id, now_str, order_id, account_ids))
         cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
 
-        # ✅ Auto Replenish (SS ထဲက အတိုင်း)
+        # ✅ Auto Replenish
         cursor.execute("""
             UPDATE accounts 
             SET status = 'available', buyer_id = NULL, sold_at = NULL, order_id = NULL, forcepay_test = FALSE 
@@ -317,8 +317,8 @@ def force_pay(message):
         success_msg = (
             f"✅ **Payment Successful!**\n\n"
             f"**Your Accounts:**\n`{acc_text}`\n\n"
-            f"📌 **Note / သတိေပးချက်:**\n"
-            f"အေကာင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းေြပာင်းလဲ အသုံးပြုပါရန်။\n"
+            f"📌 **Note / သတိပေးချက်:**\n"
+            f"အကောင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းပြောင်းလဲ အသုံးပြုပါရန်။\n"
             f"Please change password and details immediately after receiving accounts. Thank you!"
         )
         try:
@@ -367,7 +367,7 @@ def handle_query(call):
 
     data = call.data
 
-    # 1. Language Selection (X တစ်ခုတည်း ပြပါမည်)
+    # 1. Language Selection
     if data.startswith("lang_"):
         lang = data.split("_")[1]
         x_stock = get_stock_count('x')
@@ -384,7 +384,7 @@ def handle_query(call):
         markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/alphavalut"))
         bot.edit_message_text(welcome_text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 2. Category Selection -> Qty (X တစ်ခုတည်း)
+    # 2. Category Selection -> Qty
     elif data.startswith("cat_"):
         parts = data.split("_")
         category = parts[1]
@@ -413,7 +413,7 @@ def handle_query(call):
 
         bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # 3. Qty Selection -> Coin Selection (PDF Logic)
+    # 3. Qty Selection -> Coin Selection
     elif data.startswith("qty_"):
         parts = data.split("_")
         category = parts[1]
@@ -550,7 +550,7 @@ def handle_query(call):
                 acc_text = "\n".join(accounts_info)
 
                 if lang == "mm":
-                    success_msg = f"✅ **ငွေပေးချေမှု အောင်မြင်ပါသည်။**\n\n**ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n📌 **Note / သတိေပးချက်:** အေကာင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းေြပာင်းလဲ အသုံးပြုပါရန်။\nPlease change password and details immediately after receiving accounts. Thank you!"
+                    success_msg = f"✅ **ငွေပေးချေမှု အောင်မြင်ပါသည်။**\n\n**ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n📌 **Note / သတိပေးချက်:** အကောင့်ရပြီဆိုတာနဲ့ Password နဲ့ အချက်အလက်များကို ချက်ချင်းပြောင်းလဲ အသုံးပြုပါရန်။\nPlease change password and details immediately after receiving accounts. Thank you!"
                     alert_msg = "✅ အောင်မြင်ပါသည်။ အကောင့်များ ပို့ပေးလိုက်ပါပြီ။"
                 else:
                     success_msg = f"✅ **Payment Successful!**\n\n**Your Accounts:**\n`{acc_text}`\n\n📌 **Note:** Please change password and details immediately after receiving accounts. Thank you!"
