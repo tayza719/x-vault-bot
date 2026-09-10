@@ -13,7 +13,7 @@ from bip_utils import Bip39SeedGenerator, Bip44, Bip44Coins, Bip44Changes
 # ============================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-ADMIN_CHANNEL_ID = os.getenv("ADMIN_CHANNEL_ID")  # ✅ ဒါကို Private Channel ID ထည့်ရပါမယ်
+ADMIN_CHANNEL_ID = os.getenv("ADMIN_CHANNEL_ID")
 MNEMONIC = os.getenv("MASTER_MNEMONIC")
 DATABASE_URL = os.getenv("DATABASE_URL")
 CHANNEL_ID = "@alphavalut"
@@ -38,6 +38,7 @@ def get_db():
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
             id SERIAL PRIMARY KEY,
@@ -50,6 +51,7 @@ def init_db():
             forcepay_test BOOLEAN DEFAULT FALSE
         )
     """)
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             order_id SERIAL PRIMARY KEY,
@@ -64,12 +66,14 @@ def init_db():
             payment_method VARCHAR(20) DEFAULT 'crypto'
         )
     """)
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
             is_banned BOOLEAN DEFAULT FALSE
         )
     """)
+
     conn.commit()
     conn.close()
 
@@ -257,7 +261,7 @@ def check_stock_admin(message):
     bot.reply_to(message, f"**Current Store Status**\n\n✦ X Available: {x_count} (Price: ${PRICES['x']})\n✦ Total Sold: {total_sold}", parse_mode="Markdown")
 
 # ============================================
-# 5. Force Pay (Admin Channel ကို ပြန်ပို့ပါပြီ)
+# 5. Force Pay
 # ============================================
 @bot.message_handler(commands=['forcepay'])
 def force_pay(message):
@@ -347,7 +351,7 @@ def force_pay(message):
     conn.close()
 
 # ============================================
-# 6. Callback Handlers (X တစ်ခုထဲပဲ ပြပါမည်)
+# 6. Callback Handlers
 # ============================================
 @bot.callback_query_handler(func=lambda call: True)
 def handle_query(call):
@@ -541,4 +545,31 @@ def handle_query(call):
                 cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
                 conn.commit()
 
-                acc_text = "\n".
+                acc_text = "\n".join(accounts_info)
+
+                if lang == "mm":
+                    success_msg = f"✅ **ငွေပေးချေမှု အောင်မြင်ပါသည်။**\n\n**ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n⚠️ ကျေးဇူးပြု၍ Password ချက်ချင်းပြောင်းပါ။"
+                    alert_msg = "✅ အောင်မြင်ပါသည်။ အကောင့်များ ပို့ပေးလိုက်ပါပြီ။"
+                else:
+                    success_msg = f"✅ **Payment Successful!**\n\n**Your Accounts:**\n`{acc_text}`\n\n⚠️ Please change password immediately."
+                    alert_msg = "✅ Success! Accounts sent."
+
+                bot.send_message(user_id, success_msg, parse_mode="Markdown")
+                bot.answer_callback_query(call.id, alert_msg, show_alert=True)
+
+            else:
+                out_msg = "Stock မရှိတော့ပါ။ Admin ကို ဆက်သွယ်ပါ။" if lang == "mm" else "Stock Out! Please contact Admin."
+                bot.answer_callback_query(call.id, out_msg, show_alert=True)
+
+        else:
+            not_found_msg = f"ငွေမဝင်သေးပါ။ (ရောက်ရှိ: {current_balance} / လိုအပ်: {amount_coin} {coin.upper()})" if lang == "mm" else f"Payment Not Found yet. ({current_balance} / {amount_coin} {coin.upper()})"
+            bot.answer_callback_query(call.id, not_found_msg, show_alert=True)
+
+        conn.close()
+
+# ============================================
+# 7. Main Runner
+# ============================================
+if __name__ == "__main__":
+    print("Alpha Vault Bot is running...")
+    bot.infinity_polling(skip_pending=True)
