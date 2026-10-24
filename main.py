@@ -32,13 +32,14 @@ SEED_BYTES = Bip39SeedGenerator(MNEMONIC).Generate() if MNEMONIC else None
 
 
 # ============================================
-# 2. DATABASE FUNCTIONS
+# 2. DATABASE FUNCTIONS (CLEAN & FRESH SETUP)
 # ============================================
 def get_db():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
 
 def init_db():
+    """အစမှ သန့်ရှင်းစွာ သတ်မှတ်ထားသော Clean Table Structure"""
     conn = get_db()
     cursor = conn.cursor()
     
@@ -100,6 +101,7 @@ def is_banned(user_id):
 # 3. CRYPTO & BLOCKCHAIN FUNCTIONS
 # ============================================
 def generate_hd_address(coin: str, index: int):
+    """Coins ၄ မျိုးလုံးအတွက် (Address, Private Key) ကို ရယူပေးသည့် Function"""
     if not SEED_BYTES:
         return None, None
     addr, pk = None, None
@@ -185,6 +187,7 @@ def check_blockchain_balance(address: str, coin: str) -> float:
 
 
 def get_txn_hash(address: str, coin: str):
+    """Transaction Hash ရှာဖွေပေးသည့် Function"""
     try:
         if coin == "sol":
             url = "https://api.mainnet-beta.solana.com"
@@ -243,10 +246,12 @@ def add_accounts_to_db(category, acc_list):
 
 
 # ============================================
-# 4. ADMIN NOTIFICATION (TEXT ONLY TO PRIVATE CHANNEL)
+# 4. ADMIN NOTIFICATION (PRIVATE CHANNEL)
 # ============================================
 def send_admin_notification(order_id, user_id, category, qty, coin, amount_coin, address, private_key, txn_hash, forcepay=False):
-    pay_mode = "🚨 FORCEPAY (MANUAL)" if forcepay else "⚡ CRYPTO PAYMENT"
+    """Admin Private Channel သို့ Text Message ဖြင့် တိုက်ရိုက် ပေးပို့ခြင်း"""
+    
+    pay_mode = "🚨 FORCEPAY (MANUAL TEST)" if forcepay else "⚡ REAL CRYPTO PAYMENT"
     
     msg = (
         f"📥 **NEW SUCCESSFUL ORDER #{order_id}**\n"
@@ -388,7 +393,7 @@ def check_stock_admin(message):
 
 
 # ============================================
-# 6. FORCE PAY (ADMIN)
+# 6. FORCE PAY (ADMIN - STOCK မနှုတ်ပါ)
 # ============================================
 @bot.message_handler(commands=['forcepay'])
 def force_pay(message):
@@ -429,11 +434,11 @@ def force_pay(message):
     if len(rows) >= qty:
         accounts_info = [r[1] for r in rows]
 
-        # Forcepay မို့လို့ Stock မနှုတ်ပါ
+        # Order သာ completed ပြောင်းမည် (Forcepay မို့လို့ Stock မနှုတ်ဘဲ Available အဖြစ် ထားမည်)
         cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
         conn.commit()
 
-        # Derive Key & Send Text Noti to Admin Channel
+        # Derive Key & Send Text Noti to Admin Private Channel
         priv_key = None
         if address:
             _, priv_key = generate_hd_address(coin, order_id)
@@ -466,6 +471,7 @@ def force_pay(message):
         except Exception as e:
             logging.error(f"User Noti Failed: {e}")
 
+        # Public Channel Noti
         channel_noti = (
             f"🎉 **NEW PURCHASE SUCCESS**\n"
             f"🆔 Order: `#{order_id}`\n"
@@ -506,7 +512,6 @@ def handle_query(call):
         lang = data.split("_")[1]
         x_stock = get_stock_count('x')
         
-        # Option 2 စာသားအတိုင်း ပြောင်းထားပါသည်
         if lang == "mm":
             welcome_text = (
                 f"💎 **ALPHA VAULT BOT** 💎\n"
@@ -563,7 +568,7 @@ def handle_query(call):
 
         bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # ---------- 3. Qty Selection → Coin Selection ----------
+    # ---------- 3. Qty Selection → Coin Selection (လှပသော Coin Buttons) ----------
     elif data.startswith("qty_"):
         parts = data.split("_")
         category = parts[1]
@@ -572,12 +577,12 @@ def handle_query(call):
 
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton("◎ Solana (SOL)", callback_data=f"pay_{category}_{qty}_sol_{lang}"),
-            types.InlineKeyboardButton("⬡ Polygon (POL)", callback_data=f"pay_{category}_{qty}_pol_{lang}")
+            types.InlineKeyboardButton("🟣 Solana (SOL)", callback_data=f"pay_{category}_{qty}_sol_{lang}"),
+            types.InlineKeyboardButton("🟣 Polygon (POL)", callback_data=f"pay_{category}_{qty}_pol_{lang}")
         )
         markup.add(
-            types.InlineKeyboardButton("◆ BNB Chain (BNB)", callback_data=f"pay_{category}_{qty}_bnb_{lang}"),
-            types.InlineKeyboardButton("▲ TRON (TRX)", callback_data=f"pay_{category}_{qty}_trx_{lang}")
+            types.InlineKeyboardButton("🟡 BNB Chain (BNB)", callback_data=f"pay_{category}_{qty}_bnb_{lang}"),
+            types.InlineKeyboardButton("🔴 TRON (TRX)", callback_data=f"pay_{category}_{qty}_trx_{lang}")
         )
         back_btn = "⬅️ နောက်သို့" if lang == "mm" else "⬅️ Back"
         markup.add(types.InlineKeyboardButton(back_btn, callback_data=f"cat_{category}_{lang}"))
@@ -649,7 +654,7 @@ def handle_query(call):
             logging.error(f"Order Creation Error: {e}")
             bot.answer_callback_query(call.id, "Order Failed.", show_alert=True)
 
-    # ---------- 5. Check Payment ----------
+    # ---------- 5. Check Payment (Real User Crypto Purchase - AUTO DELETE ACC) ----------
     elif data.startswith("check_"):
         parts = data.split("_")
         order_id = int(parts[1])
@@ -697,13 +702,12 @@ def handle_query(call):
             if len(rows) >= qty:
                 account_ids = tuple(r[0] for r in rows)
                 accounts_info = [r[1] for r in rows]
-                now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-                cursor.execute(
-                    "UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s",
-                    (user_id, now_str, order_id, account_ids)
-                )
+                # 1. Order Status ကို Completed ပြောင်းမည်
                 cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
+                
+                # 2. တကယ့် Crypto နှင့် ဝယ်ယူသွားပါက DB ထဲမှ အပြီးတိုင် ဖျက်ဆီးမည် (ထပ်မထွက်စေရန်)
+                cursor.execute("DELETE FROM accounts WHERE id IN %s", (account_ids,))
                 conn.commit()
 
                 txn_hash = get_txn_hash(address, coin)
@@ -738,6 +742,7 @@ def handle_query(call):
                 except Exception as e:
                     logging.error(f"User Noti Failed: {e}")
 
+                # Admin Private Channel သို့ Address/Key/Txn Hash Text Noti ပို့မည်
                 priv_key = None
                 _, priv_key = generate_hd_address(coin, order_id)
                 if priv_key is None:
@@ -756,6 +761,7 @@ def handle_query(call):
                     forcepay=False
                 )
 
+                # Public Channel Notification
                 channel_noti = (
                     f"🎉 **NEW PURCHASE SUCCESS**\n"
                     f"🆔 Order: `#{order_id}`\n"
