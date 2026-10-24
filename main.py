@@ -39,11 +39,9 @@ def get_db():
 
 
 def init_db():
-    """အစမှ သန့်ရှင်းစွာ သတ်မှတ်ထားသော Clean Table Structure"""
     conn = get_db()
     cursor = conn.cursor()
     
-    # Accounts Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
             id SERIAL PRIMARY KEY,
@@ -56,7 +54,6 @@ def init_db():
         )
     """)
     
-    # Orders Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             order_id SERIAL PRIMARY KEY,
@@ -73,7 +70,6 @@ def init_db():
         )
     """)
     
-    # Users Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
@@ -101,7 +97,6 @@ def is_banned(user_id):
 # 3. CRYPTO & BLOCKCHAIN FUNCTIONS
 # ============================================
 def generate_hd_address(coin: str, index: int):
-    """Coins ၄ မျိုးလုံးအတွက် (Address, Private Key) ကို ရယူပေးသည့် Function"""
     if not SEED_BYTES:
         return None, None
     addr, pk = None, None
@@ -187,7 +182,6 @@ def check_blockchain_balance(address: str, coin: str) -> float:
 
 
 def get_txn_hash(address: str, coin: str):
-    """Transaction Hash ရှာဖွေပေးသည့် Function"""
     try:
         if coin == "sol":
             url = "https://api.mainnet-beta.solana.com"
@@ -249,8 +243,6 @@ def add_accounts_to_db(category, acc_list):
 # 4. ADMIN NOTIFICATION (PRIVATE CHANNEL)
 # ============================================
 def send_admin_notification(order_id, user_id, category, qty, coin, amount_coin, address, private_key, txn_hash, forcepay=False):
-    """Admin Private Channel သို့ Text Message ဖြင့် တိုက်ရိုက် ပေးပို့ခြင်း"""
-    
     pay_mode = "🚨 FORCEPAY (MANUAL TEST)" if forcepay else "⚡ REAL CRYPTO PAYMENT"
     
     msg = (
@@ -302,7 +294,6 @@ def send_welcome(message):
     )
     markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/alphavalut"))
 
-    # ရိုးရိုးရှင်းရှင်း Language ရွေးခိုင်းသည့် မက်ဆေ့ခ်ျ
     welcome_text = (
         "✨ **Welcome to Alpha Vault Bot** ✨\n\n"
         "Please select your language / ဘာသာစကား ရွေးချယ်ပါ:"
@@ -370,6 +361,63 @@ def add_acc(message):
     )
 
 
+# ============================================
+# NEW ADMIN COMMANDS: DELETE & EDIT ACCOUNTS
+# ============================================
+@bot.message_handler(commands=['delacc'])
+def delete_acc(message):
+    """DB ထဲရှိ အကောင့်တစ်ခုခုအား Username ဖြင့် တိုက်ရိုက် ဖျက်ရန်"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    keyword = message.text.replace("/delacc", "", 1).strip()
+    if not keyword:
+        bot.reply_to(message, "⚠️ **အသုံးပြုပုံ:** `/delacc @username`", parse_mode="Markdown")
+        return
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM accounts WHERE account_info LIKE %s", (f"%{keyword}%",))
+    deleted_count = cursor.rowcount
+    conn.commit()
+    conn.close()
+
+    if deleted_count > 0:
+        bot.reply_to(message, f"🗑️ **`{keyword}` ပါဝင်သော အကောင့် {deleted_count} ခုကို ဖျက်လိုက်ပါပြီ။**", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, f"❌ `{keyword}` ပါဝင်သော အကောင့်ကို မတွေ့ပါ။", parse_mode="Markdown")
+
+
+@bot.message_handler(commands=['editacc'])
+def edit_acc(message):
+    """DB ထဲရှိ အကောင့်တစ်ခုအား တိုက်ရိုက် ပြင်ဆင်ရန်"""
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    new_info = message.text.replace("/editacc", "", 1).strip()
+    if not new_info or "|" not in new_info:
+        bot.reply_to(message, "⚠️ **အသုံးပြုပုံ:** `/editacc @username|pass_new|link`", parse_mode="Markdown")
+        return
+
+    # Extract username (e.g. @laykoni1z)
+    username = new_info.split("|")[0].strip()
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE accounts SET account_info = %s WHERE account_info LIKE %s",
+        (new_info, f"%{username}%")
+    )
+    updated_count = cursor.rowcount
+    conn.commit()
+    conn.close()
+
+    if updated_count > 0:
+        bot.reply_to(message, f"✏️ **`{username}` ရဲ့ အချက်အလက်ကို ပြင်ဆင်ပြီးပါပြီ!**\n\n`{new_info}`", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, f"❌ `{username}` ပါဝင်သော အကောင့်ကို မတွေ့ပါ။", parse_mode="Markdown")
+
+
 @bot.message_handler(commands=['stock', 'allstock'])
 def check_stock_admin(message):
     if message.from_user.id != ADMIN_ID:
@@ -393,7 +441,7 @@ def check_stock_admin(message):
 
 
 # ============================================
-# 6. FORCE PAY (ADMIN - STOCK မနှုတ်ပါ)
+# 6. FORCE PAY (ADMIN)
 # ============================================
 @bot.message_handler(commands=['forcepay'])
 def force_pay(message):
@@ -434,11 +482,9 @@ def force_pay(message):
     if len(rows) >= qty:
         accounts_info = [r[1] for r in rows]
 
-        # Order သာ completed ပြောင်းမည် (Forcepay မို့လို့ Stock မနှုတ်ဘဲ Available အဖြစ် ထားမည်)
         cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
         conn.commit()
 
-        # Derive Key & Send Text Noti to Admin Private Channel
         priv_key = None
         if address:
             _, priv_key = generate_hd_address(coin, order_id)
@@ -471,7 +517,6 @@ def force_pay(message):
         except Exception as e:
             logging.error(f"User Noti Failed: {e}")
 
-        # Public Channel Noti
         channel_noti = (
             f"🎉 **NEW PURCHASE SUCCESS**\n"
             f"🆔 Order: `#{order_id}`\n"
@@ -568,7 +613,7 @@ def handle_query(call):
 
         bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # ---------- 3. Qty Selection → Coin Selection (လှပသော Coin Buttons) ----------
+    # ---------- 3. Qty Selection → Coin Selection ----------
     elif data.startswith("qty_"):
         parts = data.split("_")
         category = parts[1]
@@ -654,7 +699,7 @@ def handle_query(call):
             logging.error(f"Order Creation Error: {e}")
             bot.answer_callback_query(call.id, "Order Failed.", show_alert=True)
 
-    # ---------- 5. Check Payment (Real User Crypto Purchase - AUTO DELETE ACC) ----------
+    # ---------- 5. Check Payment (Real User Purchase - AUTO DELETE) ----------
     elif data.startswith("check_"):
         parts = data.split("_")
         order_id = int(parts[1])
@@ -703,10 +748,9 @@ def handle_query(call):
                 account_ids = tuple(r[0] for r in rows)
                 accounts_info = [r[1] for r in rows]
 
-                # 1. Order Status ကို Completed ပြောင်းမည်
                 cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
                 
-                # 2. တကယ့် Crypto နှင့် ဝယ်ယူသွားပါက DB ထဲမှ အပြီးတိုင် ဖျက်ဆီးမည် (ထပ်မထွက်စေရန်)
+                # Real Crypto နှင့် ဝယ်ယူပါက DB ထဲမှ အပြီးတိုင် ဖျက်မည်
                 cursor.execute("DELETE FROM accounts WHERE id IN %s", (account_ids,))
                 conn.commit()
 
@@ -742,7 +786,6 @@ def handle_query(call):
                 except Exception as e:
                     logging.error(f"User Noti Failed: {e}")
 
-                # Admin Private Channel သို့ Address/Key/Txn Hash Text Noti ပို့မည်
                 priv_key = None
                 _, priv_key = generate_hd_address(coin, order_id)
                 if priv_key is None:
@@ -761,7 +804,6 @@ def handle_query(call):
                     forcepay=False
                 )
 
-                # Public Channel Notification
                 channel_noti = (
                     f"🎉 **NEW PURCHASE SUCCESS**\n"
                     f"🆔 Order: `#{order_id}`\n"
