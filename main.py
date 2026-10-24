@@ -97,10 +97,6 @@ def is_banned(user_id):
 # 3. HELPER & CRYPTO FUNCTIONS
 # ============================================
 def format_account_output(acc_lines):
-    """
-    Pipe (|) ခံထားသော စာကြောင်းများကို အပြာရောင် Clickable Link ပါသည့်
-    လှပသော Format အဖြစ် ပြောင်းလဲပေးသည့် Function (Option 1)
-    """
     formatted = []
     for line in acc_lines:
         parts = line.split("|")
@@ -370,9 +366,15 @@ def add_acc(message):
     acc_data = parts[1].strip()
     acc_lines = [line.strip() for line in acc_data.split("\n") if line.strip()]
     added, dupes = add_accounts_to_db(category, acc_lines)
+    
+    # Total Stock ပမာဏကို ပြန်လည်ရယူခြင်း
+    total_stock = get_stock_count(category)
+    
     bot.reply_to(
         message,
-        f"✅ **{category.upper()} Stock အသစ် {added} ခု ထည့်သွင်းပြီးပါပြီ!**\n(Duplicates: {dupes})",
+        f"✅ **{category.upper()} Stock အသစ် {added} ခု ထည့်သွင်းပြီးပါပြီ!**\n"
+        f"(Duplicates: {dupes})\n"
+        f"📊 **Total Stock:** {total_stock} ခု",
         parse_mode="Markdown"
     )
 
@@ -513,7 +515,6 @@ def force_pay(message):
             forcepay=True
         )
 
-        # Format အသစ်ဖြင့် Buyer ထံ မက်ဆေ့ ပို့မည်
         acc_text = format_account_output(accounts_info)
         success_msg = (
             f"✅ **ငွေလွှဲအောင်မြင်ပါသည်။ (Order #{order_id})**\n\n"
@@ -567,12 +568,13 @@ def handle_query(call):
         lang = data.split("_")[1]
         x_stock = get_stock_count('x')
         
+        # Mail/OTP Link ပါ ဆိုသော စာသားကို ဖြုတ်ပြီး ပြင်ထားပါသည်
         if lang == "mm":
             welcome_text = (
                 f"💎 **ALPHA VAULT BOT** 💎\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"⚡ Instant Auto Delivery\n"
-                f"🔐 Full Access (Mail/OTP Link ပါ)\n"
+                f"🔐 OTP Link ပါဝင်ပြီးသား\n"
                 f"🤖 24/7 အလိုအလျောက် ဝန်ဆောင်မှု\n\n"
                 f"📦 **X Stock:** {x_stock} ခု\n"
                 f"💵 **ဈေးနှုန်း:** ${PRICES['x']} / တစ်ခု\n"
@@ -583,7 +585,7 @@ def handle_query(call):
                 f"💎 **ALPHA VAULT BOT** 💎\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"⚡ Instant Auto Delivery\n"
-                f"🔐 Full Access (Mail/OTP Link Included)\n"
+                f"🔐 OTP Link Included\n"
                 f"🤖 24/7 Automated Service\n\n"
                 f"📦 **X Stock:** {x_stock} available\n"
                 f"💵 **Price:** ${PRICES['x']} per account\n"
@@ -623,7 +625,7 @@ def handle_query(call):
 
         bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
-    # ---------- 3. Qty Selection → Coin Selection ----------
+    # ---------- 3. Qty Selection → Coin Selection (Solana ကို အစိမ်းရောင် ပြောင်းထားသည်) ----------
     elif data.startswith("qty_"):
         parts = data.split("_")
         category = parts[1]
@@ -632,7 +634,7 @@ def handle_query(call):
 
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton("🟣 Solana (SOL)", callback_data=f"pay_{category}_{qty}_sol_{lang}"),
+            types.InlineKeyboardButton("🟢 Solana (SOL)", callback_data=f"pay_{category}_{qty}_sol_{lang}"),
             types.InlineKeyboardButton("🟣 Polygon (POL)", callback_data=f"pay_{category}_{qty}_pol_{lang}")
         )
         markup.add(
