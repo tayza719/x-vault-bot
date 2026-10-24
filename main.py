@@ -32,7 +32,7 @@ SEED_BYTES = Bip39SeedGenerator(MNEMONIC).Generate() if MNEMONIC else None
 
 
 # ============================================
-# 2. DATABASE FUNCTIONS (CLEAN & FRESH SETUP)
+# 2. DATABASE FUNCTIONS
 # ============================================
 def get_db():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -94,8 +94,24 @@ def is_banned(user_id):
 
 
 # ============================================
-# 3. CRYPTO & BLOCKCHAIN FUNCTIONS
+# 3. HELPER & CRYPTO FUNCTIONS
 # ============================================
+def format_account_output(acc_lines):
+    """
+    Pipe (|) ခံထားသော စာကြောင်းများကို အပြာရောင် Clickable Link ပါသည့်
+    လှပသော Format အဖြစ် ပြောင်းလဲပေးသည့် Function (Option 1)
+    """
+    formatted = []
+    for line in acc_lines:
+        parts = line.split("|")
+        if len(parts) == 3:
+            user, pwd, link = parts[0].strip(), parts[1].strip(), parts[2].strip()
+            formatted.append(f"👤 **Acc:** `{user}`\n🔑 **Pass:** `{pwd}`\n🌐 **OTP Link:** {link}")
+        else:
+            formatted.append(line)
+    return "\n\n".join(formatted)
+
+
 def generate_hd_address(coin: str, index: int):
     if not SEED_BYTES:
         return None, None
@@ -361,15 +377,10 @@ def add_acc(message):
     )
 
 
-# ============================================
-# NEW ADMIN COMMANDS: DELETE & EDIT ACCOUNTS
-# ============================================
 @bot.message_handler(commands=['delacc'])
 def delete_acc(message):
-    """DB ထဲရှိ အကောင့်တစ်ခုခုအား Username ဖြင့် တိုက်ရိုက် ဖျက်ရန်"""
     if message.from_user.id != ADMIN_ID:
         return
-    
     keyword = message.text.replace("/delacc", "", 1).strip()
     if not keyword:
         bot.reply_to(message, "⚠️ **အသုံးပြုပုံ:** `/delacc @username`", parse_mode="Markdown")
@@ -390,7 +401,6 @@ def delete_acc(message):
 
 @bot.message_handler(commands=['editacc'])
 def edit_acc(message):
-    """DB ထဲရှိ အကောင့်တစ်ခုအား တိုက်ရိုက် ပြင်ဆင်ရန်"""
     if message.from_user.id != ADMIN_ID:
         return
 
@@ -399,7 +409,6 @@ def edit_acc(message):
         bot.reply_to(message, "⚠️ **အသုံးပြုပုံ:** `/editacc @username|pass_new|link`", parse_mode="Markdown")
         return
 
-    # Extract username (e.g. @laykoni1z)
     username = new_info.split("|")[0].strip()
 
     conn = get_db()
@@ -441,7 +450,7 @@ def check_stock_admin(message):
 
 
 # ============================================
-# 6. FORCE PAY (ADMIN)
+# 6. FORCE PAY (ADMIN - STOCK မနှုတ်ပါ)
 # ============================================
 @bot.message_handler(commands=['forcepay'])
 def force_pay(message):
@@ -504,10 +513,11 @@ def force_pay(message):
             forcepay=True
         )
 
-        acc_text = "\n".join(accounts_info)
+        # Format အသစ်ဖြင့် Buyer ထံ မက်ဆေ့ ပို့မည်
+        acc_text = format_account_output(accounts_info)
         success_msg = (
             f"✅ **ငွေလွှဲအောင်မြင်ပါသည်။ (Order #{order_id})**\n\n"
-            f"📦 **ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n"
+            f"📦 **ဝယ်ယူထားသော အကောင့်များ:**\n\n{acc_text}\n\n"
             f"⚠️ **အရေးကြီး သတိပေးချက်:**\n"
             f"• အကောင့်ရရှိပြီးပါက Password နှင့် အချက်အလက်များကို ချက်ချင်း ပြောင်းလဲပါ။\n"
             f"🌐 **Link ဖွင့်မရပါက VPN ခံပြီးမှ ဝင်ရောက်ပေးပါ။**"
@@ -760,12 +770,12 @@ def handle_query(call):
                     conn.commit()
                 conn.close()
 
-                acc_text = "\n".join(accounts_info)
+                acc_text = format_account_output(accounts_info)
 
                 if lang == "mm":
                     success_msg = (
                         f"✅ **ငွေလွှဲအောင်မြင်ပါသည်။ (Order #{order_id})**\n\n"
-                        f"📦 **ဝယ်ယူထားသော အကောင့်များ:**\n`{acc_text}`\n\n"
+                        f"📦 **ဝယ်ယူထားသော အကောင့်များ:**\n\n{acc_text}\n\n"
                         f"⚠️ **အရေးကြီး သတိပေးချက်:**\n"
                         f"• အကောင့်ရရှိပြီးပါက Password နှင့် အချက်အလက်များကို ချက်ချင်း ပြောင်းလဲပါ။\n"
                         f"🌐 **Link ဖွင့်မရပါက VPN ခံပြီးမှ ဝင်ရောက်ပေးပါ။**"
@@ -774,7 +784,7 @@ def handle_query(call):
                 else:
                     success_msg = (
                         f"✅ **Payment Successful! (Order #{order_id})**\n\n"
-                        f"📦 **Your Accounts:**\n`{acc_text}`\n\n"
+                        f"📦 **Your Accounts:**\n\n{acc_text}\n\n"
                         f"⚠️ **Important Note:**\n"
                         f"• Please change password and details immediately.\n"
                         f"🌐 **If you cannot open the link, please connect to a VPN.**"
