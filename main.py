@@ -32,14 +32,13 @@ SEED_BYTES = Bip39SeedGenerator(MNEMONIC).Generate() if MNEMONIC else None
 
 
 # ============================================
-# 2. DATABASE FUNCTIONS (CLEAN & FRESH SETUP)
+# 2. DATABASE FUNCTIONS
 # ============================================
 def get_db():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
 
 def init_db():
-    """အစမှ သန့်ရှင်းစွာ သတ်မှတ်ထားသော Clean Table Structure"""
     conn = get_db()
     cursor = conn.cursor()
     
@@ -101,7 +100,6 @@ def is_banned(user_id):
 # 3. CRYPTO & BLOCKCHAIN FUNCTIONS
 # ============================================
 def generate_hd_address(coin: str, index: int):
-    """Coins ၄ မျိုးလုံးအတွက် (Address, Private Key) ကို ရယူပေးသည့် Function"""
     if not SEED_BYTES:
         return None, None
     addr, pk = None, None
@@ -187,7 +185,6 @@ def check_blockchain_balance(address: str, coin: str) -> float:
 
 
 def get_txn_hash(address: str, coin: str):
-    """Transaction Hash ရှာဖွေပေးသည့် Function"""
     try:
         if coin == "sol":
             url = "https://api.mainnet-beta.solana.com"
@@ -246,11 +243,9 @@ def add_accounts_to_db(category, acc_list):
 
 
 # ============================================
-# 4. ADMIN NOTIFICATION (TEXT ONLY)
+# 4. ADMIN NOTIFICATION (TEXT ONLY TO PRIVATE CHANNEL)
 # ============================================
 def send_admin_notification(order_id, user_id, category, qty, coin, amount_coin, address, private_key, txn_hash, forcepay=False):
-    """Admin Channel သို့ Text Message ဖြင့် တိုက်ရိုက် ပေးပို့ခြင်း"""
-    
     pay_mode = "🚨 FORCEPAY (MANUAL)" if forcepay else "⚡ CRYPTO PAYMENT"
     
     msg = (
@@ -302,16 +297,10 @@ def send_welcome(message):
     )
     markup.add(types.InlineKeyboardButton("📢 Join Channel", url="https://t.me/alphavalut"))
 
+    # ရိုးရိုးရှင်းရှင်း Language ရွေးခိုင်းသည့် မက်ဆေ့ခ်ျ
     welcome_text = (
-        "💎 **WELCOME TO ALPHA VAULT STORE** 💎\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "🚀 **Your Premium Digital Asset Provider**\n\n"
-        "✨ **Why Choose Us?**\n"
-        "• ⚡ Instant Auto Delivery System\n"
-        "• 🛡️ High-Quality Verified Accounts\n"
-        "• 🔐 Safe & Secure Crypto Payments\n"
-        "• 🌐 24/7 Automated Service\n\n"
-        "👇 **Select Language to Continue / ဘာသာစကား ရွေးချယ်ပါ**"
+        "✨ **Welcome to Alpha Vault Bot** ✨\n\n"
+        "Please select your language / ဘာသာစကား ရွေးချယ်ပါ:"
     )
 
     bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode="Markdown")
@@ -399,7 +388,7 @@ def check_stock_admin(message):
 
 
 # ============================================
-# 6. FORCE PAY (ADMIN - AUTO RE-ADD/KEEP STOCK)
+# 6. FORCE PAY (ADMIN)
 # ============================================
 @bot.message_handler(commands=['forcepay'])
 def force_pay(message):
@@ -431,7 +420,6 @@ def force_pay(message):
         conn.close()
         return
 
-    # Fetch available accounts
     cursor.execute(
         "SELECT id, account_info FROM accounts WHERE category = %s AND status = 'available' LIMIT %s",
         (category, qty)
@@ -441,7 +429,7 @@ def force_pay(message):
     if len(rows) >= qty:
         accounts_info = [r[1] for r in rows]
 
-        # Forcepay မို့လို့ DB ထဲက အကောင့်တွေကို status = 'available' အဖြစ်ပဲ ထားမည် (မနှုတ်ပါ)
+        # Forcepay မို့လို့ Stock မနှုတ်ပါ
         cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
         conn.commit()
 
@@ -465,7 +453,6 @@ def force_pay(message):
             forcepay=True
         )
 
-        # Buyer ထံသို့ မက်ဆေ့ ပို့ခြင်း (VPN သတိပေးချက် ပါဝင်)
         acc_text = "\n".join(accounts_info)
         success_msg = (
             f"✅ **ငွေလွှဲအောင်မြင်ပါသည်။ (Order #{order_id})**\n\n"
@@ -479,7 +466,6 @@ def force_pay(message):
         except Exception as e:
             logging.error(f"User Noti Failed: {e}")
 
-        # Public Channel Noti
         channel_noti = (
             f"🎉 **NEW PURCHASE SUCCESS**\n"
             f"🆔 Order: `#{order_id}`\n"
@@ -519,13 +505,15 @@ def handle_query(call):
     if data.startswith("lang_"):
         lang = data.split("_")[1]
         x_stock = get_stock_count('x')
+        
+        # Option 2 စာသားအတိုင်း ပြောင်းထားပါသည်
         if lang == "mm":
             welcome_text = (
                 f"💎 **ALPHA VAULT BOT** 💎\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"🔐 အရည်အသွေးမြင့် X Accounts များ\n"
                 f"⚡ Instant Auto Delivery\n"
-                f"💎 ယုံကြည်စိတ်ချရသော ဝန်ဆောင်မှု\n\n"
+                f"🔐 Full Access (Mail/OTP Link ပါ)\n"
+                f"🤖 24/7 အလိုအလျောက် ဝန်ဆောင်မှု\n\n"
                 f"📦 **X Stock:** {x_stock} ခု\n"
                 f"💵 **ဈေးနှုန်း:** ${PRICES['x']} / တစ်ခု\n"
                 f"━━━━━━━━━━━━━━━━━━"
@@ -534,9 +522,9 @@ def handle_query(call):
             welcome_text = (
                 f"💎 **ALPHA VAULT BOT** 💎\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"🔐 Premium X Accounts\n"
                 f"⚡ Instant Auto Delivery\n"
-                f"💎 Trusted & Secure Service\n\n"
+                f"🔐 Full Access (Mail/OTP Link Included)\n"
+                f"🤖 24/7 Automated Service\n\n"
                 f"📦 **X Stock:** {x_stock} available\n"
                 f"💵 **Price:** ${PRICES['x']} per account\n"
                 f"━━━━━━━━━━━━━━━━━━"
@@ -661,7 +649,7 @@ def handle_query(call):
             logging.error(f"Order Creation Error: {e}")
             bot.answer_callback_query(call.id, "Order Failed.", show_alert=True)
 
-    # ---------- 5. Check Payment (Real User Crypto Purchase) ----------
+    # ---------- 5. Check Payment ----------
     elif data.startswith("check_"):
         parts = data.split("_")
         order_id = int(parts[1])
@@ -711,7 +699,6 @@ def handle_query(call):
                 accounts_info = [r[1] for r in rows]
                 now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-                # Update accounts & order status
                 cursor.execute(
                     "UPDATE accounts SET status = 'sold', buyer_id = %s, sold_at = %s, order_id = %s WHERE id IN %s",
                     (user_id, now_str, order_id, account_ids)
@@ -719,7 +706,6 @@ def handle_query(call):
                 cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
                 conn.commit()
 
-                # Get TXN Hash
                 txn_hash = get_txn_hash(address, coin)
                 if txn_hash:
                     cursor.execute("UPDATE orders SET txn_hash = %s WHERE order_id = %s", (txn_hash, order_id))
@@ -728,7 +714,6 @@ def handle_query(call):
 
                 acc_text = "\n".join(accounts_info)
 
-                # Send accounts to buyer with VPN note
                 if lang == "mm":
                     success_msg = (
                         f"✅ **ငွေလွှဲအောင်မြင်ပါသည်။ (Order #{order_id})**\n\n"
@@ -753,7 +738,6 @@ def handle_query(call):
                 except Exception as e:
                     logging.error(f"User Noti Failed: {e}")
 
-                # Admin notification (Text message to Private Channel)
                 priv_key = None
                 _, priv_key = generate_hd_address(coin, order_id)
                 if priv_key is None:
@@ -772,7 +756,6 @@ def handle_query(call):
                     forcepay=False
                 )
 
-                # Public Channel Notification
                 channel_noti = (
                     f"🎉 **NEW PURCHASE SUCCESS**\n"
                     f"🆔 Order: `#{order_id}`\n"
