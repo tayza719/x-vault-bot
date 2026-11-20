@@ -4,4 +4,3 @@ pyTelegramBotAPI
 bip-utils
 eth-account
 tronpy
-solders
